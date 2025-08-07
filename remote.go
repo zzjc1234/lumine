@@ -24,6 +24,7 @@ func Dial(logger *log.Logger, conn net.Conn, host string, port int) (dstConn net
 		}
 		for _, ip := range ips {
 			host = ip.String()
+			break
 		}
 	} else {
 		host = policy.IP
