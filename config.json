@@ -1,0 +1,31 @@
+{
+    "server_address": "127.0.0.1:1080",
+    "default_policy": {
+        "mode": "TLSfrag",
+        "tls13_only": true,
+        "num_records": 5
+    },
+    "domain_policies": {
+        "*wikimedia.org": {
+            "ip": "185.15.58.224"
+        },
+        "web.archive.org": {
+            "ip": "207.241.237.3"
+        },
+        "archive.org,www.archive.org": {
+            "ip": "207.241.225.120"
+        },
+        "github.com,gist.github.com": {
+            "ip": "4.237.22.38"
+        },
+        "api.github.com": {
+            "ip": "4.237.22.34"
+        },
+        "codeload.github.com": {
+            "ip": "4.237.22.35"
+        },
+        "uploads.github.com": {
+            "ip": "4.237.22.36"
+        }
+    }
+}
