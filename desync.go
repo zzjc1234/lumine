@@ -234,6 +234,12 @@ func DesyncSend(
 	}
 	firstPacket = firstPacket[dataLen:]
 	offset := sniLen/2 + sniPos - dataLen
+	if offset <= 0 {
+		if _, err = conn.Write(firstPacket); err != nil {
+			return fmt.Errorf("failed to send data after first fake packet: %v", err)
+		}
+		return nil
+	}
 	if _, err = conn.Write(firstPacket[:offset]); err != nil {
 		return fmt.Errorf("failed to send data after first fake packet: %v", err)
 	}

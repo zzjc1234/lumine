@@ -9,7 +9,6 @@ import (
 	"net"
 	"os"
 	"slices"
-	"strconv"
 	"sync/atomic"
 )
 
@@ -131,7 +130,7 @@ func handleClient(clientConn net.Conn) {
 		return
 	}
 	dstPort := int(binary.BigEndian.Uint16(portByte))
-	target := net.JoinHostPort(dstAddr, strconv.Itoa(dstPort))
+	target := net.JoinHostPort(dstAddr, fmt.Sprintf("%d", dstPort))
 	logger.Println("CONNECT", target)
 
 	dstConn, policy, ttl, ok := Dial(logger, clientConn, dstAddr, dstPort)
@@ -153,7 +152,7 @@ func handleClient(clientConn net.Conn) {
 		logger.Println("Error parse ClientHello:", err)
 		return
 	}
-	if policy.Tls13Only != nil && *policy.Tls13Only && !hasKeyShare {
+	if policy.TLS13Only != nil && *policy.TLS13Only && !hasKeyShare {
 		logger.Println("Not a TLS 1.3 ClientHello, connection blocked")
 		return
 	}

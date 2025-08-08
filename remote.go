@@ -3,14 +3,14 @@ package main
 import (
 	"log"
 	"net"
-	"strconv"
 	"time"
+	"fmt"
 )
 
 func Dial(logger *log.Logger, conn net.Conn, host string, port int) (dstConn net.Conn, policy Policy, ttl int, ok bool) {
 	var err error
 	if isValidIP(host) {
-		target := net.JoinHostPort(host, strconv.Itoa(port))
+		target := net.JoinHostPort(host, fmt.Sprintf("%d", port))
 		dstConn, err = net.DialTimeout("tcp", target, 10*time.Second)
 		if err != nil {
 			logger.Printf("Failed to connect to %s: %v", target, err)
@@ -20,7 +20,7 @@ func Dial(logger *log.Logger, conn net.Conn, host string, port int) (dstConn net
 		}
 		return dstConn, conf.DefaultPolicy, 0, true
 	}
-	oldTarget := net.JoinHostPort(host, strconv.Itoa(port))
+	oldTarget := net.JoinHostPort(host, fmt.Sprintf("%d", port))
 	domainPolicy := domianMatcher.Find(host)
 	if domainPolicy == nil {
 		policy = conf.DefaultPolicy
@@ -44,9 +44,9 @@ func Dial(logger *log.Logger, conn net.Conn, host string, port int) (dstConn net
 	if policy.Port != 0 {
 		port = policy.Port
 	}
-	target := net.JoinHostPort(host, strconv.Itoa(port))
+	target := net.JoinHostPort(host, fmt.Sprintf("%d", port))
 
-	if policy.Mode == "ttl-d" {
+	if policy.Mode == "ttl-d" && policy.FakeTTL <= 0 {
 		ttl, err = FindMinReachableTTL(target)
 		if err != nil {
 			logger.Println("Error find TTL:", err)

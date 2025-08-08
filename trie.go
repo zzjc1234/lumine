@@ -6,7 +6,7 @@ import (
 )
 
 type Policy struct {
-	Tls13Only       *bool   `json:"tls13_only"`
+	TLS13Only       *bool   `json:"tls13_only"`
 	IP              string  `json:"ip"`
 	Port            int     `json:"port"`
 	Mode            string  `json:"mode"`
@@ -14,6 +14,39 @@ type Policy struct {
 	FakePacket      string  `json:"fake_packet"`
 	FakeTTL         int     `json:"fake_ttl"`
 	FakeSleep       float64 `json:"fake_sleep"`
+}
+
+func escape(s string) string {
+    s = strings.ReplaceAll(s, "\r", "\\r")
+    s = strings.ReplaceAll(s, "\n", "\\n")
+    return s
+}
+
+func (p Policy) String() string {
+	fields := []string{}
+	if p.IP != "" {
+		fields = append(fields, "IP:"+p.IP)
+	}
+	if p.Port != 0 {
+		fields = append(fields, fmt.Sprintf("Port:%d", p.Port))
+	}
+	fields = append(fields, "Mode:"+p.Mode)
+	switch p.Mode {
+	case "tls-rf":
+		fields = append(fields, fmt.Sprintf("NumRecords:%d", p.NumRecords))
+	case "ttl-d":
+		fields = append(fields, "FakePacket:"+escape(p.FakePacket))
+		if p.FakeTTL == 0 {
+			fields = append(fields, "FakeTTL:auto")
+		} else {
+			fields = append(fields, fmt.Sprintf("FakeTTL:%d", p.FakeTTL))
+		}
+		fields = append(fields, fmt.Sprintf("FakeSleep:%.2f", p.FakeSleep))
+	}
+	if p.TLS13Only != nil {
+		fields = append(fields, fmt.Sprintf("TLS13Only:%v", *p.TLS13Only))
+	}
+	return "{" + strings.Join(fields, ", ") + "}"
 }
 
 type LableNode struct {
@@ -142,8 +175,8 @@ func (t *BinTrie) Find(ipOrNetwork string) *Policy {
 func MergePolicies(policies ...Policy) Policy {
 	var merged Policy
 	for _, p := range policies {
-		if p.Tls13Only != nil {
-			merged.Tls13Only = p.Tls13Only
+		if p.TLS13Only != nil {
+			merged.TLS13Only = p.TLS13Only
 		}
 		if p.IP != "" {
 			merged.IP = p.IP
