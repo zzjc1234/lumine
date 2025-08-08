@@ -9,6 +9,7 @@ import (
 
 type Config struct {
 	ServerAddr     string            `json:"server_address"`
+	DNSAddr        string            `json:"udp_dns_addr"`
 	DefaultPolicy  Policy            `json:"default_policy"`
 	DomainPolicies map[string]Policy `json:"domain_policies"`
 	//IpPolicies     map[string]Policy `json:"ip_policies"`

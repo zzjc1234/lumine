@@ -6,20 +6,20 @@ import (
 )
 
 type Policy struct {
-	TLS13Only       *bool   `json:"tls13_only"`
-	IP              string  `json:"ip"`
-	Port            int     `json:"port"`
-	Mode            string  `json:"mode"`
-	NumRecords      int     `json:"num_records"`
-	FakePacket      string  `json:"fake_packet"`
-	FakeTTL         int     `json:"fake_ttl"`
-	FakeSleep       float64 `json:"fake_sleep"`
+	TLS13Only  *bool   `json:"tls13_only"`
+	IP         string  `json:"ip"`
+	Port       int     `json:"port"`
+	Mode       string  `json:"mode"`
+	NumRecords int     `json:"num_records"`
+	FakePacket string  `json:"fake_packet"`
+	FakeTTL    int     `json:"fake_ttl"`
+	FakeSleep  float64 `json:"fake_sleep"`
 }
 
 func escape(s string) string {
-    s = strings.ReplaceAll(s, "\r", "\\r")
-    s = strings.ReplaceAll(s, "\n", "\\n")
-    return s
+	s = strings.ReplaceAll(s, "\r", "\\r")
+	s = strings.ReplaceAll(s, "\n", "\\n")
+	return s
 }
 
 func (p Policy) String() string {

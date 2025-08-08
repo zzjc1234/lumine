@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+
 	"golang.org/x/text/encoding/charmap"
 	//"strings"
 )
@@ -12,7 +13,7 @@ import (
 var encoder = charmap.ISO8859_1.NewEncoder()
 
 func isValidIP(s string) bool {
-	return net.ParseIP(s) != nil 
+	return net.ParseIP(s) != nil
 }
 
 /*

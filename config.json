@@ -1,5 +1,6 @@
 {
     "server_address": "127.0.0.1:1080",
+    "udp_dns_addr": "127.0.0.1:5300",
     "default_policy": {
         "mode": "tls-rf",
         "tls13_only": true,

@@ -1,11 +1,14 @@
 package main
 
 import (
+	"fmt"
+	"github.com/miekg/dns"
 	"log"
 	"net"
 	"time"
-	"fmt"
 )
+
+var dnsClient = new(dns.Client)
 
 func Dial(logger *log.Logger, conn net.Conn, host string, port int) (dstConn net.Conn, policy Policy, ttl int, ok bool) {
 	var err error
@@ -29,15 +32,29 @@ func Dial(logger *log.Logger, conn net.Conn, host string, port int) (dstConn net
 	}
 	logger.Printf("%s -> %+v", oldTarget, policy)
 	if policy.IP == "" {
-		ips, err := net.LookupIP(host)
+		msg := new(dns.Msg)
+		msg.SetQuestion(host+".", dns.TypeA)
+		res, _, err := dnsClient.Exchange(msg, conf.DNSAddr)
 		if err != nil {
-			logger.Println("DNS lookup error:", err)
-			return
+			logger.Println("Error DNS resolve:", err)
+			sendReply(conn, 0x01, nil, 0)
+			var zero Policy
+			return nil, zero, 0, false
 		}
-		for _, ip := range ips {
-			host = ip.String()
-			break
+		domain := host
+		for _, ans := range res.Answer {
+			if aRecord, ok := ans.(*dns.A); ok {
+				host = aRecord.A.String()
+				break
+			}
 		}
+		if domain == host {
+			logger.Println("No A record for", domain)
+			sendReply(conn, 0x01, nil, 0)
+			var zero Policy
+			return nil, zero, 0, false
+		}
+		logger.Printf("DNS %s -> %s", domain, host)
 	} else {
 		host = policy.IP
 	}
