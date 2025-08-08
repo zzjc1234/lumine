@@ -203,3 +203,48 @@ func Encode(s string) ([]byte, error) {
 	}
 	return b, nil
 }
+
+func ExpandPattern(s string) []string {
+	left := -1
+	right := -1
+	for i, ch := range s {
+		if ch == '(' && left == -1 {
+			left = i
+		}
+		if ch == ')' && right == -1 {
+			right = i
+		}
+	}
+	if left == -1 && right == -1 {
+		return splitByPipe(s)
+	}
+
+	prefix := s[:left]
+	suffix := s[right+1:]
+	inner := s[left+1 : right]
+
+	parts := splitByPipe(inner)
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		result = append(result, prefix+part+suffix)
+	}
+	return result
+}
+
+func splitByPipe(s string) []string {
+	if s == "" {
+		return []string{""}
+	}
+	result := []string{}
+	curr := ""
+	for _, ch := range s {
+		if ch == '|' {
+			result = append(result, curr)
+			curr = ""
+		} else {
+			curr += string(ch)
+		}
+	}
+	result = append(result, curr)
+	return result
+}

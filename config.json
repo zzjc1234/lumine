@@ -10,16 +10,19 @@
         "fake_sleep": 0.2
     },
     "domain_policies": {
-        "*wikimedia.org": {
+        "*(wikimedia|wikipedia|wiktionary|wikiversity|wikivoyage|wikisource|wikinews|wikidata|mediawiki|wikifunctions).org": {
             "ip": "185.15.58.224"
+        },
+        "upload.wikimedia.org": {
+            "ip": "185.15.58.240"
         },
         "web.archive.org": {
             "ip": "207.241.237.3"
         },
-        "archive.org,www.archive.org": {
+        "(www.|)archive.org": {
             "ip": "207.241.225.120"
         },
-        "github.com,gist.github.com": {
+        "(gist.|)github.com": {
             "ip": "4.237.22.38"
         },
         "api.github.com": {
@@ -30,6 +33,10 @@
         },
         "uploads.github.com": {
             "ip": "4.237.22.36"
+        },
+        "(cn|purr|et).nytimes.com": {},
+        "*nyt(imes|).com": {
+            "ip": "199.232.137.164"
         },
         "*ooni.org": {
             "ip": "76.76.21.21",
