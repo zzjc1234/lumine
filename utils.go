@@ -4,9 +4,16 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	//"net"
+	"net"
+	"golang.org/x/text/encoding/charmap"
 	//"strings"
 )
+
+var encoder = charmap.ISO8859_1.NewEncoder()
+
+func isValidIP(s string) bool {
+	return net.ParseIP(s) != nil 
+}
 
 /*
 func IPToBinaryPrefix(ipOrNetwork string) (string, error) {
@@ -186,4 +193,12 @@ func ParseClientHello(data []byte) (prtVer []byte, sniPos int, sniLen int, hasKe
 		offset = extDataEnd
 	}
 	return prtVer, sniPos, sniLen, hasKeyShare, nil
+}
+
+func Encode(s string) ([]byte, error) {
+	b, err := encoder.Bytes([]byte(s))
+	if err != nil {
+		return nil, fmt.Errorf("encoding ISO-8859-1 failed: %v", err)
+	}
+	return b, nil
 }

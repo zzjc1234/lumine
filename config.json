@@ -1,9 +1,12 @@
 {
     "server_address": "127.0.0.1:1080",
     "default_policy": {
-        "mode": "TLSfrag",
+        "mode": "tls-rf",
         "tls13_only": true,
-        "num_records": 5
+        "num_records": 5,
+        "fake_packet": "GET / HTTP/1.1\r\nHost: www.speedtest.cn\r\n\r\n",
+        "fake_ttl": 0,
+        "fake_sleep": 0.2
     },
     "domain_policies": {
         "*wikimedia.org": {
@@ -26,6 +29,18 @@
         },
         "uploads.github.com": {
             "ip": "4.237.22.36"
+        },
+        "*ooni.org": {
+            "ip": "76.76.21.21",
+            "mode": "ttl-d"
+        },
+        "onedrive.live.com": {
+            "ip": "13.107.139.11",
+            "mode": "ttl-d"
+        },
+        "skyapi.onedrive.live.com": {
+            "ip": "13.107.42.12",
+            "mode": "ttl-d"
         }
     }
 }

@@ -6,11 +6,14 @@ import (
 )
 
 type Policy struct {
-	Tls13Only  *bool  `json:"tls13_only"`
-	IP         string `json:"ip"`
-	Port       int    `json:"port"`
-	Mode       string `json:"mode"`
-	NumRecords int    `json:"num_records"`
+	Tls13Only       *bool   `json:"tls13_only"`
+	IP              string  `json:"ip"`
+	Port            int     `json:"port"`
+	Mode            string  `json:"mode"`
+	NumRecords      int     `json:"num_records"`
+	FakePacket      string  `json:"fake_packet"`
+	FakeTTL         int     `json:"fake_ttl"`
+	FakeSleep       float64 `json:"fake_sleep"`
 }
 
 type LableNode struct {
@@ -153,6 +156,15 @@ func MergePolicies(policies ...Policy) Policy {
 		}
 		if p.NumRecords != 0 {
 			merged.NumRecords = p.NumRecords
+		}
+		if p.FakePacket != "" {
+			merged.FakePacket = p.FakePacket
+		}
+		if p.FakeSleep != 0 {
+			merged.FakeSleep = p.FakeSleep
+		}
+		if p.FakeTTL != 0 {
+			merged.FakeTTL = p.FakeTTL
 		}
 	}
 	return merged

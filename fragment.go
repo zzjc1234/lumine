@@ -40,7 +40,7 @@ func SendRecords(conn net.Conn, data []byte, offset, length, num int) error {
 	if start < 0 || end > len(payload) {
 		return errors.New("slice out of payload bounds")
 	}
-	idx := offset + 1 + rnd.Intn(length-2)
+	idx := offset + 1 + rnd.Intn(length-1)
 
 	leftChunks := num / 2
 	rightChunks := num - leftChunks

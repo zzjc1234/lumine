@@ -37,7 +37,7 @@ func LoadConfig(filePath string) error {
 	domianMatcher = NewDomainMatcher()
 	for patterns, policy := range conf.DomainPolicies {
 		p := policy
-		for _, pattern := range strings.Split(patterns, ",") {
+		for pattern := range strings.SplitSeq(patterns, ",") {
 			domianMatcher.Add(pattern, &p)
 		}
 	}

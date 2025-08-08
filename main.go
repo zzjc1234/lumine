@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"slices"
 	"strconv"
 	"sync/atomic"
 )
@@ -45,52 +46,49 @@ func sendReply(conn net.Conn, rep byte, bindIP net.IP, bindPort uint16) error {
 func handleClient(clientConn net.Conn) {
 	logger := makeLogger()
 	clientAddr := clientConn.RemoteAddr().String()
-	logger.Printf("Accepted connection from %s", clientAddr)
+	logger.Println("Accepted connection from", clientAddr)
 	defer clientConn.Close()
 
 	header, err := readN(clientConn, 2)
 	if err != nil {
-		logger.Printf("Header error: %v", err)
+		logger.Println("Method selection message error:", err)
 		return
 	}
 	if header[0] != 0x05 {
-		logger.Printf("Not SOCKS5: %d", header[0])
+		logger.Println("Not SOCKS5:", header[0])
 		return
 	}
 	nMethods := int(header[1])
 	methods, err := readN(clientConn, nMethods)
 	if err != nil {
-		logger.Printf("Methods error: %v", err)
+		logger.Println("Methods error:", err)
 		return
 	}
 	var authMethod byte = 0xFF // No acceptable methods
-	for _, m := range methods {
-		if m == 0x00 {
-			authMethod = 0x00
-			break
-		}
+	if slices.Contains(methods, 0x00) {
+		authMethod = 0x00
 	}
 	_, err = clientConn.Write([]byte{0x05, authMethod})
 	if err != nil {
-		logger.Printf("Error sending auth method: %v", err)
+		logger.Println("Error sending auth method:", err)
 		return
 	}
 	if authMethod == 0xFF {
-		logger.Printf("No `no auth` method was given")
+		logger.Println("No `no auth` method was given")
 		return
 	}
 
 	header, err = readN(clientConn, 4)
 	if err != nil {
-		logger.Printf("Error reading request header: %v", err)
+		logger.Println("Error reading request header:", err)
 		return
 	}
 	if header[0] != 0x05 {
-		logger.Printf("Invalid version: %d", header[0])
+		logger.Println("Invalid version:", header[0])
 		return
 	}
 	if header[1] != 0x01 {
-		logger.Printf("Not CONNECT: %d", header[1])
+		logger.Println("Not CONNECT:", header[1])
 		sendReply(clientConn, 0x07, nil, 0)
 		return
 	}
@@ -100,43 +98,43 @@ func handleClient(clientConn net.Conn) {
 	case 0x01: // IPv4 address
 		ipBytes, err := readN(clientConn, 4)
 		if err != nil {
-			logger.Printf("Error reading IPv4 dest address: %v", err)
+			logger.Println("Error reading IPv4 dest address:", err)
 			return
 		}
 		dstAddr = net.IP(ipBytes).String()
 	case 0x03: // Domain name
 		lenByte, err := readN(clientConn, 1)
 		if err != nil {
-			logger.Printf("Error reading domain length: %v", err)
+			logger.Println("Error reading domain length:", err)
 			return
 		}
 		domainBytes, err := readN(clientConn, int(lenByte[0]))
 		if err != nil {
-			logger.Printf("Error reading domain: %v", err)
+			logger.Println("Error reading domain:", err)
 			return
 		}
 		dstAddr = string(domainBytes)
 	case 0x04: // IPv6 address
 		ipBytes, err := readN(clientConn, 16)
 		if err != nil {
-			logger.Printf("Error reading IPv6 dest address: %v", err)
+			logger.Println("Error reading IPv6 dest address:", err)
 			return
 		}
 		dstAddr = net.IP(ipBytes).String()
 	default:
-		logger.Printf("Invalid address type: %d", header[3])
+		logger.Println("Invalid address type:", header[3])
 		return
 	}
 	portByte, err := readN(clientConn, 2)
 	if err != nil {
-		logger.Printf("Error reading port: %v", err)
+		logger.Println("Error reading port:", err)
 		return
 	}
 	dstPort := int(binary.BigEndian.Uint16(portByte))
 	target := net.JoinHostPort(dstAddr, strconv.Itoa(dstPort))
-	logger.Printf("CONNECT %s", target)
+	logger.Println("CONNECT", target)
 
-	dstConn, policy, ok := Dial(logger, clientConn, dstAddr, dstPort)
+	dstConn, policy, ttl, ok := Dial(logger, clientConn, dstAddr, dstPort)
 	if !ok {
 		return
 	}
@@ -163,18 +161,41 @@ func handleClient(clientConn net.Conn) {
 	logger.Printf("Server name: %s", sniStr)
 
 	switch policy.Mode {
-	case "DIRECT":
+	case "direct":
 		if _, err = dstConn.Write(firstPacket); err != nil {
 			logger.Println("Failed to send first packet directly:", err)
 			return
 		}
 		logger.Println("Sent first packet directly")
-	case "TLSfrag":
+	case "tls-rf":
 		err = SendRecords(dstConn, firstPacket, sniPos, sniLen, policy.NumRecords)
 		if err != nil {
 			logger.Println("Error TLS fragmentation:", err)
 			return
 		}
+	case "ttl-d":
+		logger.Println("Fake TTL:", ttl)
+		fakePacketBytes, err := Encode(policy.FakePacket)
+		if err != nil {
+			logger.Println("failed to encode fake packet:", err)
+			return
+		}
+		err = DesyncSend(
+			logger,
+			dstConn,
+			firstPacket,
+			sniPos,
+			sniLen,
+			fakePacketBytes,
+			policy.FakeSleep,
+			ttl,
+		)
+		if err != nil {
+			logger.Println("Error TTL desync:", err)
+		}
+	default:
+		logger.Println("Unknown traffic mode:", policy.Mode)
+		return
 	}
 
 	go io.Copy(dstConn, clientConn)
