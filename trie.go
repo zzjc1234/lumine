@@ -69,13 +69,13 @@ type lableNode[V any] struct {
 }
 
 type DomainMatcher[V any] struct {
-	exactDomains map[string]V
+	exactDomains map[string]*V
 	root         *lableNode[V]
 }
 
 func NewDomainMatcher[V any]() *DomainMatcher[V] {
 	return &DomainMatcher[V]{
-		exactDomains: make(map[string]V),
+		exactDomains: make(map[string]*V),
 		root:         &lableNode[V]{children: make(map[string]*lableNode[V])},
 	}
 }
@@ -109,18 +109,17 @@ func (m *DomainMatcher[V]) Add(pattern string, value V) error {
 		m.insertTrie(pattern[2:], value)
 	} else if strings.HasPrefix(pattern, "*") {
 		domain := pattern[1:]
-		m.exactDomains[domain] = value
+		m.exactDomains[domain] = &value
 		m.insertTrie(domain, value)
 	} else {
-		m.exactDomains[pattern] = value
+		m.exactDomains[pattern] = &value
 	}
 	return nil
 }
 
 func (m *DomainMatcher[V]) Find(domain string) *V {
 	if value, ok := m.exactDomains[domain]; ok {
-		ptr := &value
-		return ptr
+		return value
 	}
 	node := m.root
 	lables := splitAndReverse(domain)
@@ -213,6 +212,9 @@ func (t *BitTrie) Find(ipStr string) *Policy {
 		}
 		cur = cur.children[b]
 	}
+    if cur.value != nil {
+        best = cur.value
+    }
 	return best
 }
 
