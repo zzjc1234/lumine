@@ -1,14 +1,24 @@
 package main
 
 import (
+	"encoding/binary"
 	"fmt"
+	"net"
 	"strings"
 )
 
+const (
+	HttpBlock    = -1
+	HttpRedirect = 0
+	HttpForward  = 1
+)
+
 type Policy struct {
-	TLS13Only  *bool   `json:"tls13_only"`
 	IP         string  `json:"ip"`
+	MapTo      string `json:"map_to"`
 	Port       int     `json:"port"`
+	SkipParse  *bool   `json:"skip_parse"`
+	TLS13Only  *bool   `json:"tls13_only"`
 	Mode       string  `json:"mode"`
 	NumRecords int     `json:"num_records"`
 	FakePacket string  `json:"fake_packet"`
@@ -30,39 +40,43 @@ func (p Policy) String() string {
 	if p.Port != 0 {
 		fields = append(fields, fmt.Sprintf("Port:%d", p.Port))
 	}
-	fields = append(fields, "Mode:"+p.Mode)
-	switch p.Mode {
-	case "tls-rf":
-		fields = append(fields, fmt.Sprintf("NumRecords:%d", p.NumRecords))
-	case "ttl-d":
-		fields = append(fields, "FakePacket:"+escape(p.FakePacket))
-		if p.FakeTTL == 0 {
-			fields = append(fields, "FakeTTL:auto")
-		} else {
-			fields = append(fields, fmt.Sprintf("FakeTTL:%d", p.FakeTTL))
+	if p.SkipParse != nil && *p.SkipParse {
+		fields = append(fields, "SkipParse:true")
+	} else {
+		fields = append(fields, "Mode:"+p.Mode)
+		switch p.Mode {
+		case "tls-rf":
+			fields = append(fields, fmt.Sprintf("NumRecords:%d", p.NumRecords))
+		case "ttl-d":
+			fields = append(fields, "FakePacket:"+escape(p.FakePacket))
+			if p.FakeTTL == 0 {
+				fields = append(fields, "FakeTTL:auto")
+			} else {
+				fields = append(fields, fmt.Sprintf("FakeTTL:%d", p.FakeTTL))
+			}
+			fields = append(fields, fmt.Sprintf("FakeSleep:%.2f", p.FakeSleep))
 		}
-		fields = append(fields, fmt.Sprintf("FakeSleep:%.2f", p.FakeSleep))
-	}
-	if p.TLS13Only != nil {
-		fields = append(fields, fmt.Sprintf("TLS13Only:%v", *p.TLS13Only))
+		if p.TLS13Only != nil {
+			fields = append(fields, fmt.Sprintf("TLS13Only:%v", *p.TLS13Only))
+		}
 	}
 	return "{" + strings.Join(fields, ", ") + "}"
 }
 
-type LableNode struct {
-	Children map[string]*LableNode
-	Value    *Policy
+type lableNode[V any] struct {
+	children map[string]*lableNode[V]
+	value    *V
 }
 
-type DomainMatcher struct {
-	exactDomains map[string]*Policy
-	root         *LableNode
+type DomainMatcher[V any] struct {
+	exactDomains map[string]V
+	root         *lableNode[V]
 }
 
-func NewDomainMatcher() *DomainMatcher {
-	return &DomainMatcher{
-		exactDomains: make(map[string]*Policy),
-		root:         &LableNode{Children: map[string]*LableNode{}},
+func NewDomainMatcher[V any]() *DomainMatcher[V] {
+	return &DomainMatcher[V]{
+		exactDomains: make(map[string]V),
+		root:         &lableNode[V]{children: make(map[string]*lableNode[V])},
 	}
 }
 
@@ -74,19 +88,21 @@ func splitAndReverse(domain string) []string {
 	return parts
 }
 
-func (m *DomainMatcher) insertTrie(domain string, value *Policy) {
+func (m *DomainMatcher[V]) insertTrie(domain string, value V) {
 	node := m.root
 	lables := splitAndReverse(domain)
 	for _, lable := range lables {
-		if node.Children[lable] == nil {
-			node.Children[lable] = &LableNode{Children: map[string]*LableNode{}}
+		if node.children[lable] == nil {
+			node.children[lable] = &lableNode[V]{children: make(map[string]*lableNode[V])}
 		}
-		node = node.Children[lable]
+		node = node.children[lable]
 	}
-	node.Value = value
+	tmp := new(V)
+	*tmp = value
+	node.value = tmp
 }
 
-func (m *DomainMatcher) Add(pattern string, value *Policy) error {
+func (m *DomainMatcher[V]) Add(pattern string, value V) error {
 	if !strings.Contains(pattern, ".") {
 		return fmt.Errorf("invalid pattern: %s", pattern)
 	} else if strings.HasPrefix(pattern, "*.") {
@@ -101,88 +117,122 @@ func (m *DomainMatcher) Add(pattern string, value *Policy) error {
 	return nil
 }
 
-func (m *DomainMatcher) Find(domain string) *Policy {
+func (m *DomainMatcher[V]) Find(domain string) *V {
 	if value, ok := m.exactDomains[domain]; ok {
-		return value
+		ptr := &value
+		return ptr
 	}
 	node := m.root
 	lables := splitAndReverse(domain)
-	var value *Policy
+	var value *V
 	for _, lable := range lables {
-		child, ok := node.Children[lable]
+		child, ok := node.children[lable]
 		if !ok {
 			break
 		}
 		node = child
-		if node.Value != nil {
-			value = node.Value
+		if node.value != nil {
+			value = node.value
 		}
 	}
 	return value
 }
 
-/*
-type BinNode struct {
-	Children [2]*BinNode
-	Value    *Policy
-}
-
-type BinTrie struct {
-	root *BinNode
-}
-
-func NewBinTrie() *BinTrie {
-	return &BinTrie{root: &BinNode{}}
-}
-
-func (t *BinTrie) Add(ipOrNetwork string, value *Policy) {
-	prefix, err := IPToBinaryPrefix(ipOrNetwork)
-	if err != nil {
-		panic(err)
-	}
-	cur := t.root
-	for _, bit := range prefix {
-		idx := bit - '0'
-		if cur.Children[idx] == nil {
-			cur.Children[idx] = &BinNode{}
+func parseIPorCIDR(s string) (ip uint32, bitLen int, err error) {
+	if _, ipNet, e := net.ParseCIDR(s); e == nil {
+		ip = binary.BigEndian.Uint32(ipNet.IP.To4())
+		ones, bits := ipNet.Mask.Size()
+		if bits != 32 {
+			return 0, 0, net.InvalidAddrError("non-IPv4 mask")
 		}
-		cur = cur.Children[idx]
+		if ones == 0 && bits == 0 {
+			return 0, 0, net.InvalidAddrError("non-canonical mask")
+		}
+		return ip, ones, nil
 	}
-	cur.Value = value
+	parsed := net.ParseIP(s).To4()
+	if parsed == nil {
+		return 0, 0, net.InvalidAddrError("invalid IPv4 address")
+	}
+	ip = binary.BigEndian.Uint32(parsed)
+	return ip, 32, nil
 }
 
-func (t *BinTrie) Find(ipOrNetwork string) *Policy {
-	binaryIP, err := IPToBinaryPrefix(ipOrNetwork)
+func getBit(v uint32, i int) int {
+	shift := 31 - i
+	return int((v >> shift) & 1)
+}
+
+type bitNode struct {
+	children [2]*bitNode
+	value    *Policy
+}
+
+type BitTrie struct {
+	root *bitNode
+}
+
+func NewBitTrie() *BitTrie {
+	return &BitTrie{root: &bitNode{children: [2]*bitNode{}}}
+}
+
+func (t *BitTrie) Insert(prefix string, value *Policy) error {
+	ip, bitLen, err := parseIPorCIDR(prefix)
 	if err != nil {
 		panic(err)
 	}
+
 	cur := t.root
-	var ans *Policy
-	for _, ch := range binaryIP {
-		idx := ch - '0'
-		if cur.Children[idx] == nil {
+	for i := range bitLen {
+		b := getBit(ip, i)
+		if cur.children[b] == nil {
+			cur.children[b] = &bitNode{children: [2]*bitNode{}}
+		}
+		cur = cur.children[b]
+	}
+	cur.value = value
+	return nil
+}
+
+func (t *BitTrie) Find(ipStr string) *Policy {
+	ip := net.ParseIP(ipStr).To4()
+	if ip == nil {
+		return nil
+	}
+	ipUint := binary.BigEndian.Uint32(ip)
+
+	var best *Policy
+	cur := t.root
+	for i := range 32 {
+		if cur.value != nil {
+			best = cur.value
+		}
+		b := getBit(ipUint, i)
+		if cur.children[b] == nil {
 			break
 		}
-		cur = cur.Children[idx]
-		if cur.Value != nil {
-			ans = cur.Value
-		}
+		cur = cur.children[b]
 	}
-	return ans
+	return best
 }
-*/
 
 func MergePolicies(policies ...Policy) Policy {
 	var merged Policy
 	for _, p := range policies {
-		if p.TLS13Only != nil {
-			merged.TLS13Only = p.TLS13Only
-		}
 		if p.IP != "" {
 			merged.IP = p.IP
 		}
+		if p.MapTo != "" {
+			merged.MapTo = p.MapTo
+		}
 		if p.Port != 0 {
 			merged.Port = p.Port
+		}
+		if p.SkipParse != nil {
+			merged.SkipParse = p.SkipParse
+		}
+		if p.TLS13Only != nil {
+			merged.TLS13Only = p.TLS13Only
 		}
 		if p.Mode != "" {
 			merged.Mode = p.Mode

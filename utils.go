@@ -5,9 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sort"
 
 	"golang.org/x/text/encoding/charmap"
-	//"strings"
 )
 
 var encoder = charmap.ISO8859_1.NewEncoder()
@@ -15,52 +15,6 @@ var encoder = charmap.ISO8859_1.NewEncoder()
 func isValidIP(s string) bool {
 	return net.ParseIP(s) != nil
 }
-
-/*
-func IPToBinaryPrefix(ipOrNetwork string) (string, error) {
-	if _, ipnet, err := net.ParseCIDR(ipOrNetwork); err == nil {
-		return binaryFromIPNet(ipnet)
-	}
-	if ip := net.ParseIP(ipOrNetwork); ip != nil {
-		return binaryFromIP(ip)
-	}
-	return "", fmt.Errorf("invalid IP or network: %s", ipOrNetwork)
-}
-
-func binaryFromIPNet(n *net.IPNet) (string, error) {
-	ip := n.IP
-	ones, _ := n.Mask.Size()
-	return binaryFromIPWithLen(ip, ones)
-}
-
-func binaryFromIP(ip net.IP) (string, error) {
-	if ip.To4() != nil {
-		return binaryFromIPWithLen(ip, 32)
-	}
-	if ip.To16() != nil {
-		return binaryFromIPWithLen(ip, 128)
-	}
-	return "", fmt.Errorf("invalid IP format")
-}
-
-func binaryFromIPWithLen(ip net.IP, bits int) (string, error) {
-	ip = ip.To16()
-	if ip == nil {
-		return "", fmt.Errorf("invalid IP")
-	}
-	var sb strings.Builder
-	for i := 0; i < bits/8; i++ {
-		fmt.Fprintf(&sb, "%08b", ip[i])
-	}
-	remain := bits % 8
-	if remain > 0 {
-		fmt.Fprintf(&sb, "%08b", ip[bits/8])
-		s := sb.String()
-		return s[:bits], nil
-	}
-	return sb.String(), nil
-}
-*/
 
 func ParseClientHello(data []byte) (prtVer []byte, sniPos int, sniLen int, hasKeyShare bool, err error) {
 	const (
@@ -71,16 +25,10 @@ func ParseClientHello(data []byte) (prtVer []byte, sniPos int, sniLen int, hasKe
 		extTypeKeyShare          = 0x0033
 	)
 
-	prtVer = []byte{}
+	prtVer = nil
 	sniPos = -1
 	sniLen = 0
 
-	if len(data) < recordHeaderLen {
-		return prtVer, sniPos, sniLen, false, errors.New("data too short for TLS record header")
-	}
-	if data[0] != 22 {
-		return prtVer, sniPos, sniLen, false, fmt.Errorf("unexpected record type %d, want Handshake(22)", data[0])
-	}
 	recordLen := int(binary.BigEndian.Uint16(data[3:5]))
 	if len(data) < recordHeaderLen+recordLen {
 		return prtVer, sniPos, sniLen, false, errors.New("record length exceeds data size")
@@ -196,6 +144,10 @@ func ParseClientHello(data []byte) (prtVer []byte, sniPos int, sniLen int, hasKe
 	return prtVer, sniPos, sniLen, hasKeyShare, nil
 }
 
+func GenTLSAlert(prtVer []byte, desc byte, level byte) []byte {
+	return []byte{0x15, prtVer[0], prtVer[1], 0x00, 0x02, level, desc}
+}
+
 func Encode(s string) ([]byte, error) {
 	b, err := encoder.Bytes([]byte(s))
 	if err != nil {
@@ -247,4 +199,100 @@ func splitByPipe(s string) []string {
 	}
 	result = append(result, curr)
 	return result
+}
+
+type rule struct {
+	threshold int // a
+	typ       byte // '-' or '='
+	val       int // b
+}
+
+func parseRules(conf string) ([]rule, error) {
+	if len(conf) == 0 {
+		return nil, errors.New("empty config")
+	}
+	if conf[0] != 'q' {
+		return nil, nil
+	}
+	b := []byte(conf[1:])
+
+	var rules []rule
+	i := 0
+	for i < len(b) {
+		start := i
+		for i < len(b) && b[i] >= '0' && b[i] <= '9' {
+			i++
+		}
+		if start == i {
+			return nil, errors.New("invalid rule: missing left number")
+		}
+		a := 0
+		for _, c := range b[start:i] {
+			a = a*10 + int(c-'0')
+		}
+
+		if i >= len(b) {
+			return nil, errors.New("invalid rule: missing operator")
+		}
+		op := b[i] // '-' or '='
+		if op != '-' && op != '=' {
+			return nil, errors.New("invalid operator")
+		}
+		i++
+
+		start = i
+		for i < len(b) && b[i] >= '0' && b[i] <= '9' {
+			i++
+		}
+		if start == i {
+			return nil, errors.New("invalid rule: missing right number")
+		}
+		val := 0
+		for _, c := range b[start:i] {
+			val = val*10 + int(c-'0')
+		}
+
+		rules = append(rules, rule{
+			threshold: a,
+			typ:       op,
+			val:       val,
+		})
+
+		if i < len(b) && b[i] == ';' {
+			i++
+		}
+	}
+	sort.Slice(rules, func(i, j int) bool {
+		return rules[i].threshold > rules[j].threshold
+	})
+	return rules, nil
+}
+
+func CalcTTL(conf string, dist int) (int, error) {
+	rules, err := parseRules(conf)
+	if err != nil {
+		return 0, err
+	}
+	if rules == nil {
+		val := 0
+		for i := 0; i < len(conf); i++ {
+			c := conf[i]
+			if c < '0' || c > '9' {
+				return 0, errors.New("invalid integer config")
+			}
+			val = val*10 + int(c-'0')
+		}
+		return val, nil
+	}
+
+	for _, r := range rules {
+		if dist >= r.threshold {
+			if r.typ == '-' {
+				return dist - r.val, nil
+			}
+			// r.typ == '='
+			return r.val, nil
+		}
+	}
+	return 0, errors.New("no matching TTL rule")
 }
