@@ -90,12 +90,14 @@ func sendDataWithFake(
 		windows.FILE_ATTRIBUTE_NORMAL|windows.FILE_FLAG_DELETE_ON_CLOSE,
 		windows.InvalidHandle,
 	)
+	defer windows.CloseHandle(fileHandle)
 	if err != nil {
 		return fmt.Errorf("failed to create file: %v", err)
 	}
 
 	var ov windows.Overlapped
 	eventHandle, err := windows.CreateEvent(nil, 1, 0, nil)
+	defer windows.CloseHandle(eventHandle)
 	if err != nil {
 		return fmt.Errorf("failed to create event: %v", err)
 	}
