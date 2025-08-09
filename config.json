@@ -59,6 +59,9 @@
         "*(github.io|.githubusercontent.com),(page|doc)s.github.com": {
             "ip": "146.75.48.133"
         },
+        "objects-origin.githubusercontent.com": {
+            "ip": "140.82.113.22"
+        },
         "(cn|purr|et).nytimes.com": {},
         "*nyt(imes|).com": {
             "ip": "199.232.137.164"
