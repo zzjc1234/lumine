@@ -6,6 +6,7 @@ import (
 	"net"
 	"strings"
 	"time"
+	"errors"
 
 	"github.com/miekg/dns"
 )
@@ -13,7 +14,7 @@ import (
 var dnsClient = new(dns.Client)
 
 func ipRedirect(logger *log.Logger, ip string) (string, *Policy) {
-	policy := ipMatcher.Find(ip)
+	policy := MatchIP(ip)
 	if policy == nil {
 		return ip, nil
 	}
@@ -40,7 +41,29 @@ func ipRedirect(logger *log.Logger, ip string) (string, *Policy) {
 	if chain {
 		return ipRedirect(logger, mapTo)
 	}
-	return mapTo, ipMatcher.Find(mapTo)
+	return mapTo, MatchIP(mapTo)
+}
+
+func dnsQuery(domain string, qtype uint16) (string, error) {
+	msg := new(dns.Msg)
+	msg.SetQuestion(domain+".", qtype)
+	res, _, err := dnsClient.Exchange(msg, conf.DNSAddr)
+	if err != nil {
+		return "", fmt.Errorf("error dns resolve: %v", err)
+	}
+	for _, ans := range res.Answer {
+		switch qtype {
+		case dns.TypeA:
+			if record, ok := ans.(*dns.A); ok {
+				return record.A.String(), nil
+			}
+		case dns.TypeAAAA:
+			if record, ok := ans.(*dns.AAAA); ok {
+				return record.AAAA.String(), nil
+			}
+		}
+	}
+	return "", errors.New("record not found")
 }
 
 func Dial(logger *log.Logger, conn net.Conn, host string, port int) (dstConn net.Conn, policy Policy, ttl int, ok bool) {
@@ -65,26 +88,24 @@ func Dial(logger *log.Logger, conn net.Conn, host string, port int) (dstConn net
 		policy = MergePolicies(conf.DefaultPolicy, *domainPolicy)
 	}
 	if policy.IP == "" {
-		msg := new(dns.Msg)
-		msg.SetQuestion(host+".", dns.TypeA)
-		res, _, err := dnsClient.Exchange(msg, conf.DNSAddr)
-		if err != nil {
-			logger.Println("Error DNS resolve:", err)
-			sendReply(conn, 0x01, nil, 0)
-			var zero Policy
-			return nil, zero, 0, false
-		}
-		for _, ans := range res.Answer {
-			if aRecord, ok := ans.(*dns.A); ok {
-				ip = aRecord.A.String()
-				break
+		if policy.IPv6First == nil || !*policy.IPv6First {
+			ip, err = dnsQuery(host, dns.TypeA)
+			if err != nil {
+				logger.Printf("resolve failed: %s. trying IPv6.", err)
+				ip, err = dnsQuery(host, dns.TypeAAAA)
+				if err != nil {
+					logger.Println("resolve failed:", err)
+				}
 			}
-		}
-		if ip == "" {
-			logger.Println("No A record for", host)
-			sendReply(conn, 0x01, nil, 0)
-			var zero Policy
-			return nil, zero, 0, false
+		} else {
+			ip, err = dnsQuery(host, dns.TypeAAAA)
+			if err != nil {
+				logger.Printf("resolve failed: %s. trying IPv4.", err)
+				ip, err = dnsQuery(host, dns.TypeA)
+				if err != nil {
+					logger.Println("resolve failed:", err)
+				}
+			}
 		}
 		logger.Printf("DNS %s -> %s", host, ip)
 	} else {

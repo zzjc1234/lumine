@@ -22,6 +22,7 @@ var conf Config
 var httpMatcher *DomainMatcher[int]
 var domianMatcher *DomainMatcher[Policy]
 var ipMatcher *BitTrie
+var ipv6Matcher *BitTrie6
 
 func LoadConfig(filePath string) error {
 	file, err := os.Open(filePath)
@@ -59,14 +60,27 @@ func LoadConfig(filePath string) error {
 	}
 
 	ipMatcher = NewBitTrie()
+	ipv6Matcher = NewBitTrie6()
 	for patterns, policy := range conf.IpPolicies {
 		p := policy
 		for _, elem := range strings.Split(patterns, ",") {
 			for _, ipOrNet := range ExpandPattern(elem) {
-				ipMatcher.Insert(ipOrNet, &p)
+				if strings.Contains(ipOrNet, ":") {
+					ipv6Matcher.Insert(ipOrNet, &p)
+				} else {
+					ipMatcher.Insert(ipOrNet, &p)
+				}
 			}
 		}
 	}
 
 	return nil
+}
+
+func MatchIP(ip string) *Policy {
+	if strings.Contains(ip, ":") {
+		return ipv6Matcher.Find(ip)
+	} else {
+		return ipMatcher.Find(ip)
+	}
 }

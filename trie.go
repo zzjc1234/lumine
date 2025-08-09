@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"errors"
 )
 
 const (
@@ -15,8 +16,9 @@ const (
 
 type Policy struct {
 	IP         string  `json:"ip"`
-	MapTo      string `json:"map_to"`
+	MapTo      string  `json:"map_to"`
 	Port       int     `json:"port"`
+	IPv6First  *bool   `json:"ipv6_first"`
 	SkipParse  *bool   `json:"skip_parse"`
 	TLS13Only  *bool   `json:"tls13_only"`
 	Mode       string  `json:"mode"`
@@ -212,9 +214,115 @@ func (t *BitTrie) Find(ipStr string) *Policy {
 		}
 		cur = cur.children[b]
 	}
-    if cur.value != nil {
-        best = cur.value
-    }
+	if cur.value != nil {
+		best = cur.value
+	}
+	return best
+}
+
+type ipv6Addr struct {
+	hi uint64 // high 64 bits
+	lo uint64 // low 64 bits
+}
+
+func newIPv6Addr(ip net.IP) ipv6Addr {
+	ip16 := ip.To16()
+	hi := binary.BigEndian.Uint64(ip16[0:8])
+	lo := binary.BigEndian.Uint64(ip16[8:16])
+	return ipv6Addr{hi: hi, lo: lo}
+}
+
+func (a ipv6Addr) getBit(i int) int {
+	if i < 0 || i >= 128 {
+		panic("bit index out of range")
+	}
+	if i < 64 {
+		shift := 63 - i
+		return int((a.hi >> shift) & 1)
+	}
+	shift := 63 - (i - 64)
+	return int((a.lo >> shift) & 1)
+}
+
+func parseIPorCIDRIPv6(s string) (ipv6Addr, int, error) {
+	if ip, ipNet, err := net.ParseCIDR(s); err == nil {
+		ip = ip.To16()
+		if ip == nil || ip.To4() != nil {
+			return ipv6Addr{}, 0, net.InvalidAddrError("non-IPv6 CIDR")
+		}
+		ones, bits := ipNet.Mask.Size()
+		if bits != 128 {
+			return ipv6Addr{}, 0, net.InvalidAddrError("non-IPv6 mask")
+		}
+		if ones == 0 && bits == 0 {
+			return ipv6Addr{}, 0, net.InvalidAddrError("non-canonical mask")
+		}
+		return newIPv6Addr(ip), ones, nil
+	}
+
+	ip := net.ParseIP(s).To16()
+	if ip == nil || ip.To4() != nil {
+		return ipv6Addr{}, 0, net.InvalidAddrError("invalid IPv6 address")
+	}
+	return newIPv6Addr(ip), 128, nil
+}
+
+type bitNode6 struct {
+	children [2]*bitNode6
+	value    *Policy
+}
+
+type BitTrie6 struct {
+	root *bitNode6
+}
+
+func NewBitTrie6() *BitTrie6 {
+	return &BitTrie6{root: &bitNode6{}}
+}
+
+func (t *BitTrie6) Insert(prefix string, value *Policy) error {
+	addr, bitLen, err := parseIPorCIDRIPv6(prefix)
+	if err != nil {
+		return err
+	}
+	if bitLen < 0 || bitLen > 128 {
+		return errors.New("invalid prefix length")
+	}
+
+	cur := t.root
+	for i := range bitLen {
+		b := addr.getBit(i)
+		if cur.children[b] == nil {
+			cur.children[b] = &bitNode6{}
+		}
+		cur = cur.children[b]
+	}
+	cur.value = value
+	return nil
+}
+
+func (t *BitTrie6) Find(ipStr string) *Policy {
+	ip := net.ParseIP(ipStr).To16()
+	if ip == nil || ip.To4() != nil {
+		return nil
+	}
+	addr := newIPv6Addr(ip)
+
+	var best *Policy
+	cur := t.root
+	for i := range 128 {
+		if cur.value != nil {
+			best = cur.value
+		}
+		b := addr.getBit(i)
+		if cur.children[b] == nil {
+			break
+		}
+		cur = cur.children[b]
+	}
+	if cur.value != nil {
+		best = cur.value
+	}
 	return best
 }
 

@@ -23,7 +23,7 @@ func makeLogger() *log.Logger {
 		atomic.StoreUint32(&connID, 0)
 		id = 0
 	}
-	return log.New(os.Stdout, fmt.Sprintf("%04x ", id), log.LstdFlags)
+	return log.New(os.Stdout, fmt.Sprintf("[%04x]", id), log.LstdFlags)
 }
 
 func readN(conn net.Conn, n int) ([]byte, error) {
@@ -140,11 +140,7 @@ func handleClient(clientConn net.Conn) {
 	if !ok {
 		return
 	}
-	defer func() {
-		if dstConn != nil {
-			dstConn.Close()
-		}
-	}()
+	defer dstConn.Close()
 	sendReply(clientConn, 0x00, nil, 0)
 
 	if policy.SkipParse != nil && *policy.SkipParse {

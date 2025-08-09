@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -19,12 +20,18 @@ import (
 )
 
 func FindMinReachableTTL(addr string) (int, error) {
+	var level, opt int
+	if strings.Contains(addr, "[") {
+		level, opt = windows.IPPROTO_IPV6, windows.IPV6_UNICAST_HOPS
+	} else {
+		level, opt = windows.IPPROTO_IP, windows.IP_TTL
+	}
 	low, high := 1, 32
 	found := -1
 
 	for low <= high {
 		mid := (low + high) / 2
-		ok, err := tryConnectWithTTL(addr, mid)
+		ok, err := tryConnectWithTTL(addr, level, opt, mid)
 		if err != nil {
 			ok = false
 		}
@@ -38,15 +45,15 @@ func FindMinReachableTTL(addr string) (int, error) {
 	return found, nil
 }
 
-func tryConnectWithTTL(address string, ttl int) (bool, error) {
+func tryConnectWithTTL(address string, level, opt, ttl int) (bool, error) {
 	dialer := net.Dialer{
 		Timeout: 500 * time.Millisecond,
 		Control: func(network, address string, c syscall.RawConn) error {
 			var sockErr error
 			err := c.Control(func(fd uintptr) {
 				sockErr = windows.SetsockoptInt(windows.Handle(fd),
-					windows.IPPROTO_IP,
-					windows.IP_TTL,
+					level,
+					opt,
 					ttl)
 			})
 			if err != nil {
@@ -56,7 +63,7 @@ func tryConnectWithTTL(address string, ttl int) (bool, error) {
 		},
 	}
 
-	conn, err := dialer.DialContext(context.Background(), "tcp4", address)
+	conn, err := dialer.DialContext(context.Background(), "tcp", address)
 	if err != nil {
 		return false, err
 	}
