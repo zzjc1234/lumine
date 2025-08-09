@@ -127,6 +127,9 @@
         },
         "*immersivetranslate.com": {
             "skip_parse": true
+        },
+        "imp.pixiv.net,*.googleadservices.com,nav-edge.smartscreen.microsoft.com,collector.github.com": {
+            "mode": "ban"
         }
     }
 }

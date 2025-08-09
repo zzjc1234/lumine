@@ -4,9 +4,9 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math/big"
 	"net"
 	"sort"
-	"math/big"
 
 	"golang.org/x/text/encoding/charmap"
 )
@@ -203,9 +203,9 @@ func splitByPipe(s string) []string {
 }
 
 type rule struct {
-	threshold int // a
+	threshold int  // a
 	typ       byte // '-' or '='
-	val       int // b
+	val       int  // b
 }
 
 func parseRules(conf string) ([]rule, error) {
@@ -344,8 +344,8 @@ func TransformIP(ipStr string, targetNetStr string) (string, error) {
 		return new(big.Int).SetBytes(ip)
 	}
 
-	ipInt    := toBigInt(ip)
-	netInt   := toBigInt(targetNet.IP)
+	ipInt := toBigInt(ip)
+	netInt := toBigInt(targetNet.IP)
 
 	newIPInt := new(big.Int).Or(
 		new(big.Int).And(netInt, networkMask),

@@ -1,12 +1,12 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net"
 	"strings"
 	"time"
-	"errors"
 
 	"github.com/miekg/dns"
 )
@@ -127,6 +127,12 @@ func Dial(logger *log.Logger, conn net.Conn, host string, port int) (dstConn net
 	target := net.JoinHostPort(ip, fmt.Sprintf("%d", port))
 
 	if (policy.SkipParse == nil) || (policy.SkipParse != nil && !*policy.SkipParse) {
+		if policy.Mode == "ban" {
+			logger.Println("Connection banned")
+			sendReply(conn, 0x02, nil, 0)
+			var zero Policy
+			return nil, zero, 0, false
+		}
 		if policy.Mode == "ttl-d" && policy.FakeTTL <= 0 {
 			ttl, err = FindMinReachableTTL(target)
 			if err != nil {

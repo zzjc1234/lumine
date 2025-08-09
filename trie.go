@@ -2,10 +2,10 @@ package main
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
-	"errors"
 )
 
 const (
