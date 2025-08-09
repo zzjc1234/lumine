@@ -4,8 +4,12 @@ A lightweight local SOCKS5 server written in Golang that protects HTTPS connecti
 ## Build
 
 ```
-go install github.com/moi-si/lumine
-go build
+go install github.com/moi-si/lumine@latest
+```
+
+## Run
+```
+lumine -config /path/to/config.json
 ```
 
 ## Local DNS over UDP
