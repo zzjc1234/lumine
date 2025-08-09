@@ -2,10 +2,12 @@ package main
 
 import (
 	"fmt"
-	"github.com/miekg/dns"
 	"log"
 	"net"
+	"strings"
 	"time"
+
+	"github.com/miekg/dns"
 )
 
 var dnsClient = new(dns.Client)
@@ -19,10 +21,17 @@ func ipRedirect(logger *log.Logger, ip string) (string, *Policy) {
 		return ip, policy
 	}
 	mapTo := policy.MapTo
-	var chain bool
+	chain := true
 	if mapTo[:1] == "^" {
 		mapTo = mapTo[1:]
-		chain = true
+		chain = false
+	}
+	if strings.Contains(mapTo, "/") {
+		mapTo_, err := TransformIP(ip, mapTo)
+		if err != nil {
+			panic(err)
+		}
+		mapTo = mapTo_
 	}
 	if ip == mapTo {
 		return ip, policy

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"sort"
+	"math/big"
 
 	"golang.org/x/text/encoding/charmap"
 )
@@ -295,4 +296,72 @@ func CalcTTL(conf string, dist int) (int, error) {
 		}
 	}
 	return 0, errors.New("no matching TTL rule")
+}
+
+func TransformIP(ipStr string, targetNetStr string) (string, error) {
+	ip := net.ParseIP(ipStr)
+	if ip == nil {
+		return "", errors.New("invalid IP")
+	}
+	_, targetNet, err := net.ParseCIDR(targetNetStr)
+	if err != nil {
+		return "", fmt.Errorf("invalid target network: %v", err)
+	}
+
+	isIPv4 := ip.To4() != nil
+	isIPv4Target := targetNet.IP.To4() != nil
+	if (isIPv4 && !isIPv4Target) || (!isIPv4 && isIPv4Target) {
+		return "", errors.New("IP version mismatch between source IP and target network")
+	}
+
+	var maxLen int
+	if isIPv4 {
+		maxLen = 32
+	} else {
+		maxLen = 128
+	}
+
+	prefixLen, _ := targetNet.Mask.Size()
+
+	hostBits := maxLen - prefixLen
+
+	fullMask := new(big.Int).Sub(
+		new(big.Int).Lsh(big.NewInt(1), uint(maxLen)),
+		big.NewInt(1),
+	)
+
+	hostMask := new(big.Int).Sub(
+		new(big.Int).Lsh(big.NewInt(1), uint(hostBits)),
+		big.NewInt(1),
+	)
+	networkMask := new(big.Int).Xor(fullMask, hostMask)
+	toBigInt := func(ip net.IP) *big.Int {
+		if isIPv4 {
+			ip = ip.To4()
+		} else {
+			ip = ip.To16()
+		}
+		return new(big.Int).SetBytes(ip)
+	}
+
+	ipInt    := toBigInt(ip)
+	netInt   := toBigInt(targetNet.IP)
+
+	newIPInt := new(big.Int).Or(
+		new(big.Int).And(netInt, networkMask),
+		new(big.Int).And(ipInt, hostMask),
+	)
+
+	expectedLen := 4
+	if !isIPv4 {
+		expectedLen = 16
+	}
+	newIPBytes := newIPInt.Bytes()
+	if len(newIPBytes) < expectedLen {
+		padded := make([]byte, expectedLen)
+		copy(padded[expectedLen-len(newIPBytes):], newIPBytes)
+		newIPBytes = padded
+	}
+
+	return net.IP(newIPBytes).String(), nil
 }
