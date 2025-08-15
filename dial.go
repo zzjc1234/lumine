@@ -14,7 +14,7 @@ import (
 var dnsClient = new(dns.Client)
 
 func ipRedirect(logger *log.Logger, ip string) (string, *Policy) {
-	policy := MatchIP(ip)
+	policy := matchIP(ip)
 	if policy == nil {
 		return ip, nil
 	}
@@ -41,7 +41,7 @@ func ipRedirect(logger *log.Logger, ip string) (string, *Policy) {
 	if chain {
 		return ipRedirect(logger, mapTo)
 	}
-	return mapTo, MatchIP(mapTo)
+	return mapTo, matchIP(mapTo)
 }
 
 func dnsQuery(domain string, qtype uint16) (string, error) {
