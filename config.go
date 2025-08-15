@@ -5,6 +5,8 @@ import (
 	"io"
 	"os"
 	"strings"
+
+	"github.com/moi-si/addrtrie"
 )
 
 type Config struct {
@@ -19,10 +21,10 @@ type Config struct {
 }
 
 var conf Config
-var httpMatcher *DomainMatcher[int]
-var domianMatcher *DomainMatcher[Policy]
-var ipMatcher *BitTrie
-var ipv6Matcher *BitTrie6
+var httpMatcher *addrtrie.DomainMatcher[int]
+var domianMatcher *addrtrie.DomainMatcher[Policy]
+var ipMatcher *addrtrie.BitTrie[Policy]
+var ipv6Matcher *addrtrie.BitTrie6[Policy]
 
 func LoadConfig(filePath string) error {
 	file, err := os.Open(filePath)
@@ -41,7 +43,7 @@ func LoadConfig(filePath string) error {
 		return err
 	}
 
-	httpMatcher = NewDomainMatcher[int]()
+	httpMatcher = addrtrie.NewDomainMatcher[int]()
 	for patterns, policy := range conf.HttpPolicy {
 		for _, elem := range strings.Split(patterns, ",") {
 			for _, pattern := range ExpandPattern(elem) {
@@ -50,7 +52,7 @@ func LoadConfig(filePath string) error {
 		}
 	}
 
-	domianMatcher = NewDomainMatcher[Policy]()
+	domianMatcher = addrtrie.NewDomainMatcher[Policy]()
 	for patterns, policy := range conf.DomainPolicies {
 		for _, elem := range strings.Split(patterns, ",") {
 			for _, pattern := range ExpandPattern(elem) {
@@ -59,8 +61,8 @@ func LoadConfig(filePath string) error {
 		}
 	}
 
-	ipMatcher = NewBitTrie()
-	ipv6Matcher = NewBitTrie6()
+	ipMatcher = addrtrie.NewBitTrie[Policy]()
+	ipv6Matcher = addrtrie.NewBitTrie6[Policy]()
 	for patterns, policy := range conf.IpPolicies {
 		p := policy
 		for _, elem := range strings.Split(patterns, ",") {
@@ -79,7 +81,8 @@ func LoadConfig(filePath string) error {
 
 func MatchIP(ip string) *Policy {
 	if strings.Contains(ip, ":") {
-		return ipv6Matcher.Find(ip)
+		policy, _ := ipv6Matcher.Find(ip)
+		return policy
 	} else {
 		return ipMatcher.Find(ip)
 	}
