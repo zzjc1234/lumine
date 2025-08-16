@@ -3,31 +3,25 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"strings"
 
 	"github.com/moi-si/addrtrie"
 )
 
-const (
-	HttpBlock    = -1
-	HttpRedirect = 0
-	HttpForward  = 1
-)
-
 type Policy struct {
-	IP         string  `json:"ip"`
-	MapTo      string  `json:"map_to"`
-	Port       int     `json:"port"`
-	IPv6First  *bool   `json:"ipv6_first"`
-	SkipParse  *bool   `json:"skip_parse"`
-	TLS13Only  *bool   `json:"tls13_only"`
-	Mode       string  `json:"mode"`
-	NumRecords int     `json:"num_records"`
-	FakePacket string  `json:"fake_packet"`
-	FakeTTL    int     `json:"fake_ttl"`
-	FakeSleep  float64 `json:"fake_sleep"`
+	IP           string  `json:"ip"`
+	MapTo        string  `json:"map_to"`
+	Port         int     `json:"port"`
+	ResolveRetry *bool   `json:"resolve_retry"`
+	IPv6First    *bool   `json:"ipv6_first"`
+	HttpMode     string  `json:"http_mode"`
+	TLS13Only    *bool   `json:"tls13_only"`
+	Mode         string  `json:"mode"`
+	NumRecords   int     `json:"num_records"`
+	FakePacket   string  `json:"fake_packet"`
+	FakeTTL      int     `json:"fake_ttl"`
+	FakeSleep    float64 `json:"fake_sleep"`
 }
 
 func escape(s string) string {
@@ -39,35 +33,41 @@ func escape(s string) string {
 func (p Policy) String() string {
 	fields := []string{}
 	if p.IP != "" {
-		fields = append(fields, "IP:"+p.IP)
+		fields = append(fields, "IP: "+p.IP)
 	}
 	if p.Port != 0 {
-		fields = append(fields, fmt.Sprintf("Port:%d", p.Port))
+		fields = append(fields, fmt.Sprintf("port=%d", p.Port))
 	}
-	if p.SkipParse != nil && *p.SkipParse {
-		fields = append(fields, "SkipParse:true")
-	} else {
-		fields = append(fields, "Mode:"+p.Mode)
-		switch p.Mode {
-		case "tls-rf":
-			fields = append(fields, fmt.Sprintf("NumRecords:%d", p.NumRecords))
-		case "ttl-d":
-			fields = append(fields, "FakePacket:"+escape(p.FakePacket))
-			if p.FakeTTL == 0 {
-				fields = append(fields, "FakeTTL:auto")
-			} else {
-				fields = append(fields, fmt.Sprintf("FakeTTL:%d", p.FakeTTL))
-			}
-			fields = append(fields, fmt.Sprintf("FakeSleep:%.2f", p.FakeSleep))
+	if p.IPv6First != nil && *p.IPv6First {
+		fields = append(fields, "ipv6_first")
+	}
+	if p.ResolveRetry != nil && *p.ResolveRetry {
+		fields = append(fields, "resolve_retry")
+	}
+	fields = append(fields, fmt.Sprintf("http %s", p.HttpMode))
+	fields = append(fields, p.Mode)
+	switch p.Mode {
+	case "tls-rf":
+		fields = append(fields, fmt.Sprintf("%d records", p.NumRecords))
+		if p.TLS13Only != nil && *p.TLS13Only {
+			fields = append(fields, "tls13_only")
 		}
-		if p.TLS13Only != nil {
-			fields = append(fields, fmt.Sprintf("TLS13Only:%v", *p.TLS13Only))
+	case "ttl-d":
+		fields = append(fields, "fake_packet: "+escape(p.FakePacket))
+		if p.FakeTTL == 0 {
+			fields = append(fields, "auto_fake_ttl")
+		} else {
+			fields = append(fields, fmt.Sprintf("fake_ttl=%d", p.FakeTTL))
+		}
+		fields = append(fields, fmt.Sprintf("fake_sleep=%v", p.FakeSleep))
+		if p.TLS13Only != nil && *p.TLS13Only {
+			fields = append(fields, "tls13_only")
 		}
 	}
-	return "{" + strings.Join(fields, ", ") + "}"
+	return strings.Join(fields, " | ")
 }
 
-func MergePolicies(policies ...Policy) Policy {
+func MergePolicies(policies ...Policy) *Policy {
 	var merged Policy
 	for _, p := range policies {
 		if p.IP != "" {
@@ -76,11 +76,14 @@ func MergePolicies(policies ...Policy) Policy {
 		if p.MapTo != "" {
 			merged.MapTo = p.MapTo
 		}
+		if p.ResolveRetry != nil {
+			merged.ResolveRetry = p.ResolveRetry
+		}
 		if p.Port != 0 {
 			merged.Port = p.Port
 		}
-		if p.SkipParse != nil {
-			merged.SkipParse = p.SkipParse
+		if p.HttpMode != "" {
+			merged.HttpMode = p.HttpMode
 		}
 		if p.TLS13Only != nil {
 			merged.TLS13Only = p.TLS13Only
@@ -101,7 +104,7 @@ func MergePolicies(policies ...Policy) Policy {
 			merged.FakeTTL = p.FakeTTL
 		}
 	}
-	return merged
+	return &merged
 }
 
 type Config struct {
@@ -116,42 +119,28 @@ type Config struct {
 }
 
 var conf Config
-var httpMatcher *addrtrie.DomainMatcher[int]
-var domianMatcher *addrtrie.DomainMatcher[Policy]
+var domainMatcher *addrtrie.DomainMatcher[Policy]
 var ipMatcher *addrtrie.BitTrie[Policy]
 var ipv6Matcher *addrtrie.BitTrie6[Policy]
 
-func LoadConfig(filePath string) error {
+func loadConfig(filePath string) error {
 	file, err := os.Open(filePath)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
 
-	data, err := io.ReadAll(file)
-	if err != nil {
+	decoder := json.NewDecoder(file)
+	decoder.DisallowUnknownFields()
+	if err = decoder.Decode(&conf); err != nil {
 		return err
 	}
 
-	err = json.Unmarshal(data, &conf)
-	if err != nil {
-		return err
-	}
-
-	httpMatcher = addrtrie.NewDomainMatcher[int]()
-	for patterns, policy := range conf.HttpPolicy {
-		for _, elem := range strings.Split(patterns, ",") {
-			for _, pattern := range ExpandPattern(elem) {
-				httpMatcher.Add(pattern, policy)
-			}
-		}
-	}
-
-	domianMatcher = addrtrie.NewDomainMatcher[Policy]()
+	domainMatcher = addrtrie.NewDomainMatcher[Policy]()
 	for patterns, policy := range conf.DomainPolicies {
-		for _, elem := range strings.Split(patterns, ",") {
+		for _, elem := range strings.Split(patterns, ";") {
 			for _, pattern := range ExpandPattern(elem) {
-				domianMatcher.Add(pattern, policy)
+				domainMatcher.Add(pattern, policy)
 			}
 		}
 	}
@@ -160,7 +149,7 @@ func LoadConfig(filePath string) error {
 	ipv6Matcher = addrtrie.NewBitTrie6[Policy]()
 	for patterns, policy := range conf.IpPolicies {
 		p := policy
-		for _, elem := range strings.Split(patterns, ",") {
+		for _, elem := range strings.Split(patterns, ";") {
 			for _, ipOrNet := range ExpandPattern(elem) {
 				if strings.Contains(ipOrNet, ":") {
 					ipv6Matcher.Insert(ipOrNet, &p)

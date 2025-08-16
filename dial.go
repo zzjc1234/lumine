@@ -22,17 +22,18 @@ func ipRedirect(logger *log.Logger, ip string) (string, *Policy) {
 		return ip, policy
 	}
 	mapTo := policy.MapTo
-	chain := true
+	var chain bool
 	if mapTo[:1] == "^" {
 		mapTo = mapTo[1:]
-		chain = false
+	} else {
+		chain = true
 	}
 	if strings.Contains(mapTo, "/") {
-		mapTo_, err := TransformIP(ip, mapTo)
+		var err error
+		mapTo, err = TransformIP(ip, mapTo)
 		if err != nil {
 			panic(err)
 		}
-		mapTo = mapTo_
 	}
 	if ip == mapTo {
 		return ip, policy
@@ -66,107 +67,117 @@ func dnsQuery(domain string, qtype uint16) (string, error) {
 	return "", errors.New("record not found")
 }
 
-func Dial(logger *log.Logger, conn net.Conn, host string, port int) (dstConn net.Conn, policy Policy, ttl int, ok bool) {
+func Dial(logger *log.Logger, conn net.Conn, host string, port int) (dstConn net.Conn, policy *Policy, ttl int, ok bool) {
 	var err error
-	if isValidIP(host) {
-		target := net.JoinHostPort(host, fmt.Sprintf("%d", port))
-		dstConn, err = net.DialTimeout("tcp", target, 10*time.Second)
-		if err != nil {
-			logger.Printf("Failed to connect to %s: %v", target, err)
-			sendReply(conn, 0x07, nil, 0)
-			var zero Policy
-			return nil, zero, 0, false
-		}
-		return dstConn, conf.DefaultPolicy, 0, true
-	}
 	var ip string
-	oldTarget := net.JoinHostPort(host, fmt.Sprintf("%d", port))
-	domainPolicy := domianMatcher.Find(host)
-	if domainPolicy == nil {
-		policy = conf.DefaultPolicy
-	} else {
-		policy = MergePolicies(conf.DefaultPolicy, *domainPolicy)
-	}
-	if policy.IP == "" {
-		if policy.IPv6First == nil || !*policy.IPv6First {
-			ip, err = dnsQuery(host, dns.TypeA)
-			if err != nil {
-				logger.Printf("resolve failed: %s. trying IPv6.", err)
-				ip, err = dnsQuery(host, dns.TypeAAAA)
-				if err != nil {
-					logger.Println("resolve failed:", err)
-				}
-			}
+
+	if isValidIP(host) {
+		ip, policy = ipRedirect(logger, host)
+		if policy == nil {
+			policy = &conf.DefaultPolicy
 		} else {
-			ip, err = dnsQuery(host, dns.TypeAAAA)
-			if err != nil {
-				logger.Printf("resolve failed: %s. trying IPv4.", err)
+			policy = MergePolicies(conf.DefaultPolicy, *policy)
+		}
+	} else {
+		domainPolicy := domainMatcher.Find(host)
+		found := domainPolicy != nil
+		if found {
+			policy = MergePolicies(conf.DefaultPolicy, *domainPolicy)
+		} else {
+			policy = &conf.DefaultPolicy
+		}
+		if policy.IP == "" {
+			if policy.IPv6First == nil || !*policy.IPv6First {
 				ip, err = dnsQuery(host, dns.TypeA)
 				if err != nil {
-					logger.Println("resolve failed:", err)
+					if policy.ResolveRetry != nil && *policy.ResolveRetry {
+						logger.Printf("Failed to resolve: %v. Trying IPv6.", err)
+						ip, err = dnsQuery(host, dns.TypeAAAA)
+						if err != nil {
+							logger.Println("Retry failed:", err)
+							sendReply(conn, 0x01, nil, 0)
+							return nil, nil, 0, false
+						}
+					} else {
+						logger.Println("Error resolve:", err)
+						sendReply(conn, 0x01, nil, 0)
+						return nil, nil, 0, false
+					}
+				}
+			} else {
+				ip, err = dnsQuery(host, dns.TypeAAAA)
+				if err != nil {
+					if policy.ResolveRetry != nil && *policy.ResolveRetry {
+						logger.Printf("Failed to resolve: %v. Trying IPv4.", err)
+						ip, err = dnsQuery(host, dns.TypeA)
+						if err != nil {
+							logger.Println("Retry failed:", err)
+							sendReply(conn, 0x01, nil, 0)
+							return nil, nil, 0, false
+						}
+					} else {
+						logger.Println("Error resolve:", err)
+						sendReply(conn, 0x01, nil, 0)
+						return nil, nil, 0, false
+					}
 				}
 			}
+			logger.Printf("DNS %s -> %s", host, ip)
+		} else {
+			ip = policy.IP
 		}
-		logger.Printf("DNS %s -> %s", host, ip)
-	} else {
-		ip = policy.IP
+		var ipPolicy *Policy
+		ip, ipPolicy = ipRedirect(logger, ip)
+		if ipPolicy != nil {
+			if found {
+				policy = MergePolicies(conf.DefaultPolicy, *ipPolicy, *domainPolicy)
+			} else {
+				policy = MergePolicies(conf.DefaultPolicy, *ipPolicy)
+			}
+		}
+	}
+	if policy.Mode == "block" {
+		logger.Println("Connection blocked")
+		sendReply(conn, 0x02, nil, 0)
+		return nil, nil, 0, false
 	}
 	if policy.Port != 0 {
 		port = policy.Port
 	}
 
-	ip, ipPolicy := ipRedirect(logger, ip)
-	if ipPolicy != nil {
-		if domainPolicy == nil {
-			policy = MergePolicies(conf.DefaultPolicy, *ipPolicy)
-		} else {
-			policy = MergePolicies(conf.DefaultPolicy, *ipPolicy, *domainPolicy)
-		}
-	}
 	logger.Printf("%s -> %s", host, policy)
 	target := net.JoinHostPort(ip, fmt.Sprintf("%d", port))
 
-	if (policy.SkipParse == nil) || (policy.SkipParse != nil && !*policy.SkipParse) {
-		if policy.Mode == "ban" {
-			logger.Println("Connection banned")
-			sendReply(conn, 0x02, nil, 0)
-			var zero Policy
-			return nil, zero, 0, false
+	if policy.Mode == "ttl-d" && policy.FakeTTL <= 0 {
+		ttl, err = FindMinReachableTTL(target)
+		if err != nil {
+			logger.Println("Error find TTL:", err)
+			sendReply(conn, 0x01, nil, 0)
+			return nil, nil, 0, false
 		}
-		if policy.Mode == "ttl-d" && policy.FakeTTL <= 0 {
-			ttl, err = FindMinReachableTTL(target)
+		if ttl == -1 {
+			logger.Println("Reachable TTL not found")
+			sendReply(conn, 0x01, nil, 0)
+			return nil, nil, 0, false
+		}
+		if conf.FakeTTLRules != "" {
+			ttl, err = CalcTTL(conf.FakeTTLRules, ttl)
 			if err != nil {
-				logger.Println("Error find TTL:", err)
+				logger.Println("Error calculate TTL:", err)
 				sendReply(conn, 0x01, nil, 0)
-				var zero Policy
-				return nil, zero, 0, false
+				return nil, nil, 0, false
 			}
-			if ttl == -1 {
-				logger.Println("Reachable TTL not found")
-				sendReply(conn, 0x01, nil, 0)
-				var zero Policy
-				return nil, zero, 0, false
-			}
-			if conf.FakeTTLRules != "" {
-				ttl, err = CalcTTL(conf.FakeTTLRules, ttl)
-				if err != nil {
-					logger.Println("Error calculate TTL:", err)
-					sendReply(conn, 0x01, nil, 0)
-					var zero Policy
-					return nil, zero, 0, false
-				}
-			} else {
-				ttl -= 1
-			}
+		} else {
+			ttl -= 1
 		}
 	}
 
 	dstConn, err = net.DialTimeout("tcp", target, 10*time.Second)
 	if err != nil {
-		logger.Printf("Failed to connect to %s(%s): %v", oldTarget, target, err)
-		sendReply(conn, 0x07, nil, 0)
-		var zero Policy
-		return nil, zero, ttl, false
+		logger.Printf("Failed to connect to %s: %v", target, err)
+		sendReply(conn, 0x01, nil, 0)
+		return nil, nil, 0, false
 	}
+	sendReply(conn, 0x00, nil, 0)
 	return dstConn, policy, ttl, true
 }

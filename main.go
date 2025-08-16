@@ -23,7 +23,7 @@ func makeLogger() *log.Logger {
 		atomic.StoreUint32(&connID, 0)
 		id = 0
 	}
-	return log.New(os.Stdout, fmt.Sprintf("[%04x]", id), log.LstdFlags)
+	return log.New(os.Stdout, fmt.Sprintf("[%04x] ", id), log.LstdFlags)
 }
 
 func readN(conn net.Conn, n int) ([]byte, error) {
@@ -125,6 +125,7 @@ func handleClient(clientConn net.Conn) {
 		dstAddr = net.IP(ipBytes).String()
 	default:
 		logger.Println("Invalid address type:", header[3])
+		sendReply(clientConn, 0x08, nil, 0)
 		return
 	}
 	portByte, err := readN(clientConn, 2)
@@ -141,9 +142,8 @@ func handleClient(clientConn net.Conn) {
 		return
 	}
 	defer dstConn.Close()
-	sendReply(clientConn, 0x00, nil, 0)
 
-	if policy.SkipParse != nil && *policy.SkipParse {
+	if policy.Mode == "raw" {
 		go io.Copy(clientConn, dstConn)
 		io.Copy(dstConn, clientConn)
 		return
@@ -163,7 +163,7 @@ func handleClient(clientConn net.Conn) {
 	case 'G', 'P', 'D', 'O', 'T', 'H':
 		req, err := http.ReadRequest(br)
 		if err != nil {
-			logger.Println("parse HTTP request:", err)
+			logger.Println("Error parse HTTP request:", err)
 			return
 		}
 		defer req.Body.Close()
@@ -173,20 +173,19 @@ func handleClient(clientConn net.Conn) {
 			host = req.URL.Host
 		}
 		if host == "" {
-			logger.Println("cannot determine target host")
+			logger.Println("Cannot determine target host")
 			return
 		}
-		logger.Printf("%s %s => %s", req.Method, req.URL, host)
+		logger.Printf("%s %s to %s", req.Method, req.URL, host)
 
-		ptr := httpMatcher.Find(host)
-		var httpMode int
-		if ptr == nil {
-			httpMode = conf.DefaultHttpPolicy
+		policy := domainMatcher.Find(host)
+		if policy == nil {
+			policy = &conf.DefaultPolicy
 		} else {
-			httpMode = *ptr
+			policy = MergePolicies(conf.DefaultPolicy, *policy)
 		}
-		switch httpMode {
-		case HttpBlock:
+		switch policy.HttpMode {
+		case "block":
 			resp := &http.Response{
 				Status:        "403 Forbidden",
 				StatusCode:    403,
@@ -197,19 +196,18 @@ func handleClient(clientConn net.Conn) {
 				ContentLength: 0,
 				Close:         true,
 			}
-			err = resp.Write(clientConn)
-			if err != nil {
-				logger.Println("failed to send 403 response:", err)
+			if err = resp.Write(clientConn); err != nil {
+				logger.Println("Failed to send 403 response:", err)
 			} else {
-				logger.Printf("HTTP request to %s blocked", host)
+				logger.Println("HTTP request blocked")
 			}
 			return
-		case HttpRedirect:
+		case "redirect":
 			httpsURL := "https://" + host + req.URL.RequestURI()
 			resp := &http.Response{
 				Status:        "302 Found",
 				StatusCode:    302,
-				Proto:         "HTTP/1.1",
+				Proto:         req.Proto,
 				ProtoMajor:    1,
 				ProtoMinor:    1,
 				Header:        make(http.Header),
@@ -218,16 +216,19 @@ func handleClient(clientConn net.Conn) {
 			}
 			resp.Header.Set("Location", httpsURL)
 			if err = resp.Write(clientConn); err != nil {
-				logger.Println("failed to send 302 response:", err)
+				logger.Println("Failed to send 302 response:", err)
 			} else {
-				logger.Println("Redirect HTTP to HTTPS for", host)
+				logger.Println("Redirect HTTP to HTTPS")
 			}
 			return
-		case HttpForward:
+		case "direct":
 			if err := req.Write(dstConn); err != nil {
-				logger.Printf("forward request to %s failed: %v", host, err)
+				logger.Println("Failed to forward request:", err)
 				return
 			}
+		default:
+			logger.Println("Unknown HTTP mode:", policy.HttpMode)
+			return
 		}
 	case 0x16:
 		payloadLen := binary.BigEndian.Uint16(peekBytes[3:5])
@@ -239,27 +240,34 @@ func handleClient(clientConn net.Conn) {
 		}
 		prtVer, sniPos, sniLen, hasKeyShare, err := ParseClientHello(record)
 		if err != nil {
-			logger.Println("Error parse ClientHello:", err)
+			logger.Println("Error parse record:", err)
 			return
 		}
 		if policy.TLS13Only != nil && *policy.TLS13Only && !hasKeyShare {
 			logger.Println("Not a TLS 1.3 ClientHello, connection blocked")
 			_, err := clientConn.Write(GenTLSAlert(prtVer, 0x46, 0x02))
 			if err != nil {
-				log.Println("failed to write TLS Alert:", err)
+				log.Println("Failed to write TLS Alert:", err)
 			}
 			return
 		}
 		sniStr := string(record[sniPos : sniPos+sniLen])
 		logger.Printf("Server name: %s", sniStr)
+		if dstAddr != sniStr {
+			domainPolicy := domainMatcher.Find(sniStr)
+			if domainPolicy != nil && domainPolicy.Mode == "block" {
+				logger.Println("Connection blocked")
+				return
+			}
+		}
 
 		switch policy.Mode {
 		case "direct":
 			if _, err = dstConn.Write(record); err != nil {
-				logger.Println("Failed to send first packet directly:", err)
+				logger.Println("Failed to send ClientHello directly:", err)
 				return
 			}
-			logger.Println("Sent first packet directly")
+			logger.Println("Sent ClientHello directly")
 		case "tls-rf":
 			err = SendRecords(dstConn, record, sniPos, sniLen, policy.NumRecords)
 			if err != nil {
@@ -271,7 +279,7 @@ func handleClient(clientConn net.Conn) {
 			logger.Println("Fake TTL:", ttl)
 			fakePacketBytes, err := Encode(policy.FakePacket)
 			if err != nil {
-				logger.Println("failed to encode fake packet:", err)
+				logger.Println("Failed to encode fake packet:", err)
 				return
 			}
 			err = DesyncSend(
@@ -286,12 +294,16 @@ func handleClient(clientConn net.Conn) {
 			)
 			if err != nil {
 				logger.Println("Error TTL desync:", err)
+				return
 			}
 			logger.Println("Successfully sent ClientHello")
 		default:
 			logger.Println("Unknown traffic mode:", policy.Mode)
 			return
 		}
+	default:
+		logger.Println("Unknown packet type")
+		return
 	}
 
 	go io.Copy(dstConn, clientConn)
@@ -300,12 +312,18 @@ func handleClient(clientConn net.Conn) {
 
 func main() {
 	configPath := flag.String("config", "config.json", "Config file path")
+	addr := flag.String("addr", "", "Server address")
 	flag.Parse()
-	if err := LoadConfig(*configPath); err != nil {
+	if err := loadConfig(*configPath); err != nil {
 		panic(fmt.Sprintf("Failed to load config: %v", err))
 	}
 
-	listenAddr := conf.ServerAddr
+	var listenAddr string
+	if *addr == "" {
+		listenAddr = conf.ServerAddr
+	} else {
+		listenAddr = *addr
+	}
 	ln, err := net.Listen("tcp", listenAddr)
 	if err != nil {
 		panic(fmt.Sprintf("Listen error: %v", err))
@@ -314,9 +332,9 @@ func main() {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
-			log.Printf("Accept error: %v", err)
-			continue
+			log.Printf("Error accept: %v", err)
+		} else {
+			go handleClient(conn)
 		}
-		go handleClient(conn)
 	}
 }
