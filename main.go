@@ -251,55 +251,64 @@ func handleClient(clientConn net.Conn) {
 			}
 			return
 		}
-		sniStr := string(record[sniPos : sniPos+sniLen])
-		logger.Printf("Server name: %s", sniStr)
-		if dstAddr != sniStr {
-			domainPolicy := domainMatcher.Find(sniStr)
-			if domainPolicy != nil && domainPolicy.Mode == "block" {
-				logger.Println("Connection blocked")
-				return
-			}
-		}
-
-		switch policy.Mode {
-		case "direct":
+		if sniPos <= 0 || sniLen <= 0 {
+			logger.Println("No SNI in ClientHello")
 			if _, err = dstConn.Write(record); err != nil {
 				logger.Println("Failed to send ClientHello directly:", err)
 				return
 			}
 			logger.Println("Sent ClientHello directly")
-		case "tls-rf":
-			err = SendRecords(dstConn, record, sniPos, sniLen, policy.NumRecords)
-			if err != nil {
-				logger.Println("Error TLS fragmentation:", err)
+		} else {
+			sniStr := string(record[sniPos : sniPos+sniLen])
+			logger.Printf("Server name: %s", sniStr)
+			if dstAddr != sniStr {
+				domainPolicy := domainMatcher.Find(sniStr)
+				if domainPolicy != nil && domainPolicy.Mode == "block" {
+					logger.Println("Connection blocked")
+					return
+				}
+			}
+
+			switch policy.Mode {
+			case "direct":
+				if _, err = dstConn.Write(record); err != nil {
+					logger.Println("Failed to send ClientHello directly:", err)
+					return
+				}
+				logger.Println("Sent ClientHello directly")
+			case "tls-rf":
+				err = SendRecords(dstConn, record, sniPos, sniLen, policy.NumRecords)
+				if err != nil {
+					logger.Println("Error TLS fragmentation:", err)
+					return
+				}
+				logger.Println("Successfully sent ClientHello")
+			case "ttl-d":
+				logger.Println("Fake TTL:", ttl)
+				fakePacketBytes, err := Encode(policy.FakePacket)
+				if err != nil {
+					logger.Println("Failed to encode fake packet:", err)
+					return
+				}
+				err = DesyncSend(
+					logger,
+					dstConn,
+					record,
+					sniPos,
+					sniLen,
+					fakePacketBytes,
+					policy.FakeSleep,
+					ttl,
+				)
+				if err != nil {
+					logger.Println("Error TTL desync:", err)
+					return
+				}
+				logger.Println("Successfully sent ClientHello")
+			default:
+				logger.Println("Unknown traffic mode:", policy.Mode)
 				return
 			}
-			logger.Println("Successfully sent ClientHello")
-		case "ttl-d":
-			logger.Println("Fake TTL:", ttl)
-			fakePacketBytes, err := Encode(policy.FakePacket)
-			if err != nil {
-				logger.Println("Failed to encode fake packet:", err)
-				return
-			}
-			err = DesyncSend(
-				logger,
-				dstConn,
-				record,
-				sniPos,
-				sniLen,
-				fakePacketBytes,
-				policy.FakeSleep,
-				ttl,
-			)
-			if err != nil {
-				logger.Println("Error TTL desync:", err)
-				return
-			}
-			logger.Println("Successfully sent ClientHello")
-		default:
-			logger.Println("Unknown traffic mode:", policy.Mode)
-			return
 		}
 	default:
 		logger.Println("Unknown packet type")
