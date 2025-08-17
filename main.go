@@ -128,16 +128,16 @@ func handleClient(clientConn net.Conn) {
 		sendReply(clientConn, 0x08, nil, 0)
 		return
 	}
-	portByte, err := readN(clientConn, 2)
+	portBytes, err := readN(clientConn, 2)
 	if err != nil {
 		logger.Println("Error reading port:", err)
 		return
 	}
-	dstPort := int(binary.BigEndian.Uint16(portByte))
+	dstPort := binary.BigEndian.Uint16(portBytes)
 	target := net.JoinHostPort(dstAddr, fmt.Sprintf("%d", dstPort))
 	logger.Println("CONNECT", target)
 
-	dstConn, policy, ttl, ok := Dial(logger, clientConn, dstAddr, dstPort)
+	dstConn, policy, ttl, ok := dial(logger, clientConn, dstAddr, dstPort)
 	if !ok {
 		return
 	}
@@ -180,9 +180,9 @@ func handleClient(clientConn net.Conn) {
 
 		policy := domainMatcher.Find(host)
 		if policy == nil {
-			policy = &conf.DefaultPolicy
+			policy = &defaultPolicy
 		} else {
-			policy = MergePolicies(conf.DefaultPolicy, *policy)
+			policy = MergePolicies(defaultPolicy, *policy)
 		}
 		switch policy.HttpMode {
 		case "block":
@@ -233,19 +233,18 @@ func handleClient(clientConn net.Conn) {
 	case 0x16:
 		payloadLen := binary.BigEndian.Uint16(peekBytes[3:5])
 		record := make([]byte, 5+payloadLen)
-		_, err = io.ReadFull(br, record)
-		if err != nil {
+		if _, err = io.ReadFull(br, record); err != nil {
 			logger.Println("failed to read record:", err)
 			return
 		}
-		prtVer, sniPos, sniLen, hasKeyShare, err := ParseClientHello(record)
+		prtVer, sniPos, sniLen, hasKeyShare, err := parseClientHello(record)
 		if err != nil {
 			logger.Println("Error parse record:", err)
 			return
 		}
 		if policy.TLS13Only != nil && *policy.TLS13Only && !hasKeyShare {
 			logger.Println("Not a TLS 1.3 ClientHello, connection blocked")
-			_, err := clientConn.Write(GenTLSAlert(prtVer, 0x46, 0x02))
+			_, err := clientConn.Write(genTLSAlert(prtVer, 0x46, 0x02))
 			if err != nil {
 				log.Println("Failed to write TLS Alert:", err)
 			}
@@ -277,15 +276,15 @@ func handleClient(clientConn net.Conn) {
 				}
 				logger.Println("Sent ClientHello directly")
 			case "tls-rf":
-				err = SendRecords(dstConn, record, sniPos, sniLen, policy.NumRecords)
+				err = sendRecords(dstConn, record, sniPos, sniLen, policy.NumRecords)
 				if err != nil {
 					logger.Println("Error TLS fragmentation:", err)
 					return
 				}
 				logger.Println("Successfully sent ClientHello")
 			case "ttl-d":
-				logger.Println("Fake TTL:", ttl)
-				fakePacketBytes, err := Encode(policy.FakePacket)
+				logger.Println("fake_ttl=", ttl)
+				fakePacketBytes, err := encode(policy.FakePacket)
 				if err != nil {
 					logger.Println("Failed to encode fake packet:", err)
 					return
@@ -312,7 +311,6 @@ func handleClient(clientConn net.Conn) {
 		}
 	default:
 		logger.Println("Unknown packet type")
-		return
 	}
 
 	go io.Copy(dstConn, clientConn)
@@ -323,13 +321,14 @@ func main() {
 	configPath := flag.String("config", "config.json", "Config file path")
 	addr := flag.String("addr", "", "Server address")
 	flag.Parse()
-	if err := loadConfig(*configPath); err != nil {
+	serverAddr, err := loadConfig(*configPath)
+	if err != nil {
 		panic(fmt.Sprintf("Failed to load config: %v", err))
 	}
 
 	var listenAddr string
 	if *addr == "" {
-		listenAddr = conf.ServerAddr
+		listenAddr = serverAddr
 	} else {
 		listenAddr = *addr
 	}

@@ -30,7 +30,7 @@ func ipRedirect(logger *log.Logger, ip string) (string, *Policy) {
 	}
 	if strings.Contains(mapTo, "/") {
 		var err error
-		mapTo, err = TransformIP(ip, mapTo)
+		mapTo, err = transformIP(ip, mapTo)
 		if err != nil {
 			panic(err)
 		}
@@ -48,7 +48,7 @@ func ipRedirect(logger *log.Logger, ip string) (string, *Policy) {
 func dnsQuery(domain string, qtype uint16) (string, error) {
 	msg := new(dns.Msg)
 	msg.SetQuestion(domain+".", qtype)
-	res, _, err := dnsClient.Exchange(msg, conf.DNSAddr)
+	res, _, err := dnsClient.Exchange(msg, dnsAddr)
 	if err != nil {
 		return "", fmt.Errorf("error dns resolve: %v", err)
 	}
@@ -67,24 +67,24 @@ func dnsQuery(domain string, qtype uint16) (string, error) {
 	return "", errors.New("record not found")
 }
 
-func Dial(logger *log.Logger, conn net.Conn, host string, port int) (dstConn net.Conn, policy *Policy, ttl int, ok bool) {
+func dial(logger *log.Logger, conn net.Conn, host string, port uint16) (dstConn net.Conn, policy *Policy, ttl int, ok bool) {
 	var err error
 	var ip string
 
 	if isValidIP(host) {
 		ip, policy = ipRedirect(logger, host)
 		if policy == nil {
-			policy = &conf.DefaultPolicy
+			policy = &defaultPolicy
 		} else {
-			policy = MergePolicies(conf.DefaultPolicy, *policy)
+			policy = MergePolicies(defaultPolicy, *policy)
 		}
 	} else {
 		domainPolicy := domainMatcher.Find(host)
 		found := domainPolicy != nil
 		if found {
-			policy = MergePolicies(conf.DefaultPolicy, *domainPolicy)
+			policy = MergePolicies(defaultPolicy, *domainPolicy)
 		} else {
-			policy = &conf.DefaultPolicy
+			policy = &defaultPolicy
 		}
 		if policy.IP == "" {
 			if policy.IPv6First == nil || !*policy.IPv6First {
@@ -130,9 +130,9 @@ func Dial(logger *log.Logger, conn net.Conn, host string, port int) (dstConn net
 		ip, ipPolicy = ipRedirect(logger, ip)
 		if ipPolicy != nil {
 			if found {
-				policy = MergePolicies(conf.DefaultPolicy, *ipPolicy, *domainPolicy)
+				policy = MergePolicies(defaultPolicy, *ipPolicy, *domainPolicy)
 			} else {
-				policy = MergePolicies(conf.DefaultPolicy, *ipPolicy)
+				policy = MergePolicies(defaultPolicy, *ipPolicy)
 			}
 		}
 	}
@@ -148,27 +148,31 @@ func Dial(logger *log.Logger, conn net.Conn, host string, port int) (dstConn net
 	logger.Printf("%s -> %s", host, policy)
 	target := net.JoinHostPort(ip, fmt.Sprintf("%d", port))
 
-	if policy.Mode == "ttl-d" && policy.FakeTTL <= 0 {
-		ttl, err = FindMinReachableTTL(target)
-		if err != nil {
-			logger.Println("Error find TTL:", err)
-			sendReply(conn, 0x01, nil, 0)
-			return nil, nil, 0, false
-		}
-		if ttl == -1 {
-			logger.Println("Reachable TTL not found")
-			sendReply(conn, 0x01, nil, 0)
-			return nil, nil, 0, false
-		}
-		if conf.FakeTTLRules != "" {
-			ttl, err = CalcTTL(conf.FakeTTLRules, ttl)
+	if policy.Mode == "ttl-d" {
+		if policy.FakeTTL == 0 {
+			ttl, err = FindMinReachableTTL(target)
 			if err != nil {
-				logger.Println("Error calculate TTL:", err)
+				logger.Println("Error find TTL:", err)
 				sendReply(conn, 0x01, nil, 0)
 				return nil, nil, 0, false
 			}
+			if ttl == -1 {
+				logger.Println("Reachable TTL not found")
+				sendReply(conn, 0x01, nil, 0)
+				return nil, nil, 0, false
+			}
+			if fakeTTLRules != "" {
+				ttl, err = calcTTL(fakeTTLRules, ttl)
+				if err != nil {
+					logger.Println("Error calculate TTL:", err)
+					sendReply(conn, 0x01, nil, 0)
+					return nil, nil, 0, false
+				}
+			} else {
+				ttl -= 1
+			}
 		} else {
-			ttl -= 1
+			ttl = policy.FakeTTL
 		}
 	}
 

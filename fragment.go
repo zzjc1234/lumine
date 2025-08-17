@@ -11,19 +11,19 @@ import (
 
 var rnd = rand.New(rand.NewSource(time.Now().UnixNano()))
 
-func SendRecords(conn net.Conn, data []byte, offset, length, num int) error {
+func sendRecords(conn net.Conn, data []byte, offset, length, num int) error {
 	if len(data) < 5 {
 		return errors.New("data too short")
 	}
 	if num <= 0 {
-		return errors.New("invalid num")
+		return errors.New("invalid num_records")
 	}
 	if length < 4 {
 		return errors.New("invalid length")
 	}
 	if num == 1 {
 		if _, err := conn.Write(data); err != nil {
-			return errors.New("failed to send data directly")
+			return fmt.Errorf("failed to send data directly: %v", err)
 		}
 		return nil
 	}
@@ -42,8 +42,8 @@ func SendRecords(conn net.Conn, data []byte, offset, length, num int) error {
 	}
 	idx := offset + 1 + rnd.Intn(length-1)
 
-	leftChunks := num / 2
-	rightChunks := num - leftChunks
+	rightChunks := num / 2
+	leftChunks := num - rightChunks
 	leftData := payload[:idx]
 	rightData := payload[idx:]
 
@@ -56,12 +56,17 @@ func SendRecords(conn net.Conn, data []byte, offset, length, num int) error {
 		return err
 	}
 	allParts := append(leftParts, rightParts...)
-	tcpData := []byte{}
+	totalLen := 0
 	for _, part := range allParts {
-		tcpData = append(tcpData, header...)
-		if len(part) > 0xFFFF {
+		partLen := len(part)
+		if len(part) > 0xffff {
 			return errors.New("single chunk exceeds 65535 bytes, cannot fit into uint16")
 		}
+		totalLen += 3 + 2 + partLen
+	}
+	tcpData := make([]byte, 0, totalLen)
+	for _, part := range allParts {
+		tcpData = append(tcpData, header...)
 		var lenBytes [2]byte
 		binary.BigEndian.PutUint16(lenBytes[:], uint16(len(part)))
 		tcpData = append(tcpData, lenBytes[:]...)
@@ -92,7 +97,7 @@ func splitEvenly(data []byte, n int) ([][]byte, error) {
 	baseSize := len(data) / n
 	parts := make([][]byte, n)
 	pos := 0
-	for i := 0; i < n; i++ {
+	for i := range n {
 		size := baseSize
 		if i == n-1 {
 			size = len(data) - pos
@@ -100,10 +105,7 @@ func splitEvenly(data []byte, n int) ([][]byte, error) {
 		if size < 0 {
 			size = 0
 		}
-		end := pos + size
-		if end > len(data) {
-			end = len(data)
-		}
+		end := min(pos+size, len(data))
 		parts[i] = data[pos:end]
 		pos = end
 	}

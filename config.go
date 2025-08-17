@@ -12,7 +12,7 @@ import (
 type Policy struct {
 	IP           string  `json:"ip"`
 	MapTo        string  `json:"map_to"`
-	Port         int     `json:"port"`
+	Port         uint16  `json:"port"`
 	ResolveRetry *bool   `json:"resolve_retry"`
 	IPv6First    *bool   `json:"ipv6_first"`
 	HttpMode     string  `json:"http_mode"`
@@ -22,12 +22,6 @@ type Policy struct {
 	FakePacket   string  `json:"fake_packet"`
 	FakeTTL      int     `json:"fake_ttl"`
 	FakeSleep    float64 `json:"fake_sleep"`
-}
-
-func escape(s string) string {
-	s = strings.ReplaceAll(s, "\r", "\\r")
-	s = strings.ReplaceAll(s, "\n", "\\n")
-	return s
 }
 
 func (p Policy) String() string {
@@ -111,35 +105,41 @@ type Config struct {
 	ServerAddr        string            `json:"server_address"`
 	DNSAddr           string            `json:"udp_dns_addr"`
 	DefaultHttpPolicy int               `json:"default_http_policy"`
-	HttpPolicy        map[string]int    `json:"http_policy"`
 	FakeTTLRules      string            `json:"fake_ttl_rules"`
 	DefaultPolicy     Policy            `json:"default_policy"`
 	DomainPolicies    map[string]Policy `json:"domain_policies"`
 	IpPolicies        map[string]Policy `json:"ip_policies"`
 }
 
-var conf Config
-var domainMatcher *addrtrie.DomainMatcher[Policy]
-var ipMatcher *addrtrie.BitTrie[Policy]
-var ipv6Matcher *addrtrie.BitTrie6[Policy]
+var (
+	defaultPolicy         Policy
+	dnsAddr, fakeTTLRules string
+	domainMatcher         *addrtrie.DomainMatcher[Policy]
+	ipMatcher             *addrtrie.BitTrie[Policy]
+	ipv6Matcher           *addrtrie.BitTrie6[Policy]
+)
 
-func loadConfig(filePath string) error {
+func loadConfig(filePath string) (string, error) {
 	file, err := os.Open(filePath)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer file.Close()
 
 	decoder := json.NewDecoder(file)
 	decoder.DisallowUnknownFields()
+	var conf Config
 	if err = decoder.Decode(&conf); err != nil {
-		return err
+		return "", err
 	}
+	defaultPolicy = conf.DefaultPolicy
+	dnsAddr = conf.DNSAddr
+	fakeTTLRules = conf.FakeTTLRules
 
 	domainMatcher = addrtrie.NewDomainMatcher[Policy]()
 	for patterns, policy := range conf.DomainPolicies {
-		for _, elem := range strings.Split(patterns, ";") {
-			for _, pattern := range ExpandPattern(elem) {
+		for elem := range strings.SplitSeq(patterns, ";") {
+			for _, pattern := range expandPattern(elem) {
 				domainMatcher.Add(pattern, policy)
 			}
 		}
@@ -149,8 +149,8 @@ func loadConfig(filePath string) error {
 	ipv6Matcher = addrtrie.NewBitTrie6[Policy]()
 	for patterns, policy := range conf.IpPolicies {
 		p := policy
-		for _, elem := range strings.Split(patterns, ";") {
-			for _, ipOrNet := range ExpandPattern(elem) {
+		for elem := range strings.SplitSeq(patterns, ";") {
+			for _, ipOrNet := range expandPattern(elem) {
 				if strings.Contains(ipOrNet, ":") {
 					ipv6Matcher.Insert(ipOrNet, &p)
 				} else {
@@ -160,14 +160,13 @@ func loadConfig(filePath string) error {
 		}
 	}
 
-	return nil
+	return conf.ServerAddr, nil
 }
 
 func matchIP(ip string) *Policy {
 	if strings.Contains(ip, ":") {
 		policy, _ := ipv6Matcher.Find(ip)
 		return policy
-	} else {
-		return ipMatcher.Find(ip)
 	}
+	return ipMatcher.Find(ip)
 }

@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"net"
 	"sort"
+	"strings"
 
 	"golang.org/x/text/encoding/charmap"
 )
@@ -17,7 +18,7 @@ func isValidIP(s string) bool {
 	return net.ParseIP(s) != nil
 }
 
-func ParseClientHello(data []byte) (prtVer []byte, sniPos int, sniLen int, hasKeyShare bool, err error) {
+func parseClientHello(data []byte) (prtVer []byte, sniPos int, sniLen int, hasKeyShare bool, err error) {
 	const (
 		recordHeaderLen          = 5
 		handshakeHeaderLen       = 4
@@ -145,11 +146,11 @@ func ParseClientHello(data []byte) (prtVer []byte, sniPos int, sniLen int, hasKe
 	return prtVer, sniPos, sniLen, hasKeyShare, nil
 }
 
-func GenTLSAlert(prtVer []byte, desc byte, level byte) []byte {
+func genTLSAlert(prtVer []byte, desc byte, level byte) []byte {
 	return []byte{0x15, prtVer[0], prtVer[1], 0x00, 0x02, level, desc}
 }
 
-func Encode(s string) ([]byte, error) {
+func encode(s string) ([]byte, error) {
 	b, err := encoder.Bytes([]byte(s))
 	if err != nil {
 		return nil, fmt.Errorf("encoding ISO-8859-1 failed: %v", err)
@@ -157,7 +158,7 @@ func Encode(s string) ([]byte, error) {
 	return b, nil
 }
 
-func ExpandPattern(s string) []string {
+func expandPattern(s string) []string {
 	left := -1
 	right := -1
 	for i, ch := range s {
@@ -269,7 +270,7 @@ func parseRules(conf string) ([]rule, error) {
 	return rules, nil
 }
 
-func CalcTTL(conf string, dist int) (int, error) {
+func calcTTL(conf string, dist int) (int, error) {
 	rules, err := parseRules(conf)
 	if err != nil {
 		return 0, err
@@ -298,7 +299,7 @@ func CalcTTL(conf string, dist int) (int, error) {
 	return 0, errors.New("no matching TTL rule")
 }
 
-func TransformIP(ipStr string, targetNetStr string) (string, error) {
+func transformIP(ipStr string, targetNetStr string) (string, error) {
 	ip := net.ParseIP(ipStr)
 	if ip == nil {
 		return "", errors.New("invalid IP")
@@ -364,4 +365,10 @@ func TransformIP(ipStr string, targetNetStr string) (string, error) {
 	}
 
 	return net.IP(newIPBytes).String(), nil
+}
+
+func escape(s string) string {
+	s = strings.ReplaceAll(s, "\r", "\\r")
+	s = strings.ReplaceAll(s, "\n", "\\n")
+	return s
 }
