@@ -45,7 +45,7 @@
         }
     },
     "domain_policies": {
-        "cloudflare-dns.com;one.one.one.one": {
+        "*cloudflare.com;cloudflare-dns.com;one.one.one.one": {
             "ip": "172.64.229.158"
         },
         "*(wikimedia|wikipedia|wiktionary|wikiversity|wikivoyage|wikisource|wikinews|wikidata|mediawiki|wikifunctions).org": {

@@ -283,14 +283,13 @@ func handleClient(clientConn net.Conn) {
 				}
 				logger.Println("Successfully sent ClientHello")
 			case "ttl-d":
-				logger.Println("fake_ttl=", ttl)
+				logger.Printf("fake_ttl=%d", ttl)
 				fakePacketBytes, err := encode(policy.FakePacket)
 				if err != nil {
 					logger.Println("Failed to encode fake packet:", err)
 					return
 				}
 				err = DesyncSend(
-					logger,
 					dstConn,
 					record,
 					sniPos,

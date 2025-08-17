@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"os"
 	"path/filepath"
@@ -193,7 +192,6 @@ func sendDataWithFake(
 }
 
 func DesyncSend(
-	logger *log.Logger,
 	conn net.Conn,
 	firstPacket []byte,
 	sniPos, sniLen int,
