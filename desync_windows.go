@@ -18,7 +18,7 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func FindMinReachableTTL(addr string) (int, error) {
+func minReachableTTL(addr string) (int, error) {
 	var level, opt int
 	if strings.Contains(addr, "[") {
 		level, opt = windows.IPPROTO_IPV6, windows.IPV6_UNICAST_HOPS
@@ -191,7 +191,7 @@ func sendDataWithFake(
 	return nil
 }
 
-func DesyncSend(
+func desyncSend(
 	conn net.Conn,
 	firstPacket []byte,
 	sniPos, sniLen int,

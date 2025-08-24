@@ -4,19 +4,16 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"log"
 	"math/big"
 	"net"
-	"sort"
 	"strings"
 
+	"github.com/miekg/dns"
 	"golang.org/x/text/encoding/charmap"
 )
 
 var encoder = charmap.ISO8859_1.NewEncoder()
-
-func isValidIP(s string) bool {
-	return net.ParseIP(s) != nil
-}
 
 func parseClientHello(data []byte) (prtVer []byte, sniPos int, sniLen int, hasKeyShare bool, err error) {
 	const (
@@ -146,8 +143,9 @@ func parseClientHello(data []byte) (prtVer []byte, sniPos int, sniLen int, hasKe
 	return prtVer, sniPos, sniLen, hasKeyShare, nil
 }
 
-func genTLSAlert(prtVer []byte, desc byte, level byte) []byte {
-	return []byte{0x15, prtVer[0], prtVer[1], 0x00, 0x02, level, desc}
+func sendTLSAlert(conn net.Conn, prtVer []byte, desc byte, level byte) error {
+	_, err := conn.Write([]byte{0x15, prtVer[0], prtVer[1], 0x00, 0x02, level, desc})
+	return err
 }
 
 func encode(s string) ([]byte, error) {
@@ -201,102 +199,6 @@ func splitByPipe(s string) []string {
 	}
 	result = append(result, curr)
 	return result
-}
-
-type rule struct {
-	threshold int  // a
-	typ       byte // '-' or '='
-	val       int  // b
-}
-
-func parseRules(conf string) ([]rule, error) {
-	if len(conf) == 0 {
-		return nil, errors.New("empty config")
-	}
-	if conf[0] != 'q' {
-		return nil, nil
-	}
-	b := []byte(conf[1:])
-
-	var rules []rule
-	i := 0
-	for i < len(b) {
-		start := i
-		for i < len(b) && b[i] >= '0' && b[i] <= '9' {
-			i++
-		}
-		if start == i {
-			return nil, errors.New("invalid rule: missing left number")
-		}
-		a := 0
-		for _, c := range b[start:i] {
-			a = a*10 + int(c-'0')
-		}
-
-		if i >= len(b) {
-			return nil, errors.New("invalid rule: missing operator")
-		}
-		op := b[i] // '-' or '='
-		if op != '-' && op != '=' {
-			return nil, errors.New("invalid operator")
-		}
-		i++
-
-		start = i
-		for i < len(b) && b[i] >= '0' && b[i] <= '9' {
-			i++
-		}
-		if start == i {
-			return nil, errors.New("invalid rule: missing right number")
-		}
-		val := 0
-		for _, c := range b[start:i] {
-			val = val*10 + int(c-'0')
-		}
-
-		rules = append(rules, rule{
-			threshold: a,
-			typ:       op,
-			val:       val,
-		})
-
-		if i < len(b) && b[i] == ';' {
-			i++
-		}
-	}
-	sort.Slice(rules, func(i, j int) bool {
-		return rules[i].threshold > rules[j].threshold
-	})
-	return rules, nil
-}
-
-func calcTTL(conf string, dist int) (int, error) {
-	rules, err := parseRules(conf)
-	if err != nil {
-		return 0, err
-	}
-	if rules == nil {
-		val := 0
-		for i := 0; i < len(conf); i++ {
-			c := conf[i]
-			if c < '0' || c > '9' {
-				return 0, errors.New("invalid integer config")
-			}
-			val = val*10 + int(c-'0')
-		}
-		return val, nil
-	}
-
-	for _, r := range rules {
-		if dist >= r.threshold {
-			if r.typ == '-' {
-				return dist - r.val, nil
-			}
-			// r.typ == '='
-			return r.val, nil
-		}
-	}
-	return 0, errors.New("no matching TTL rule")
 }
 
 func transformIP(ipStr string, targetNetStr string) (string, error) {
@@ -367,8 +269,72 @@ func transformIP(ipStr string, targetNetStr string) (string, error) {
 	return net.IP(newIPBytes).String(), nil
 }
 
+func ipRedirect(logger *log.Logger, ip string) (string, *Policy) {
+	policy := matchIP(ip)
+	if policy == nil {
+		return ip, nil
+	}
+	if policy.MapTo == "" {
+		return ip, policy
+	}
+	mapTo := policy.MapTo
+	var chain bool
+	if mapTo[:1] == "^" {
+		mapTo = mapTo[1:]
+	} else {
+		chain = true
+	}
+	if strings.Contains(mapTo, "/") {
+		var err error
+		mapTo, err = transformIP(ip, mapTo)
+		if err != nil {
+			panic(err)
+		}
+	}
+	if ip == mapTo {
+		return ip, policy
+	}
+	logger.Printf("Redirect %s to %s", ip, mapTo)
+	if chain {
+		return ipRedirect(logger, mapTo)
+	}
+	return mapTo, matchIP(mapTo)
+}
+
 func escape(s string) string {
 	s = strings.ReplaceAll(s, "\r", "\\r")
 	s = strings.ReplaceAll(s, "\n", "\\n")
 	return s
+}
+
+var dnsClient = new(dns.Client)
+
+func dnsQuery(domain string, qtype uint16) (string, error) {
+	msg := new(dns.Msg)
+	msg.SetQuestion(domain+".", qtype)
+	res, _, err := dnsClient.Exchange(msg, dnsAddr)
+	if err != nil {
+		return "", fmt.Errorf("error dns resolve: %v", err)
+	}
+	for _, ans := range res.Answer {
+		switch qtype {
+		case dns.TypeA:
+			if record, ok := ans.(*dns.A); ok {
+				return record.A.String(), nil
+			}
+		case dns.TypeAAAA:
+			if record, ok := ans.(*dns.AAAA); ok {
+				return record.AAAA.String(), nil
+			}
+		}
+	}
+	return "", errors.New("record not found")
+}
+
+func doubleQuery(domain string, first, second uint16) (ip string, err1, err2 error) {
+	ip, err1 = dnsQuery(domain, first)
+	if err1 != nil {
+		ip, err2 = dnsQuery(domain, second)
+	}
+	return
 }

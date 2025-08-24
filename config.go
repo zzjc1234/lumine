@@ -5,17 +5,20 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"errors"
+	"sort"
 
 	"github.com/moi-si/addrtrie"
 )
 
 type Policy struct {
-	IP           string  `json:"ip"`
+	ReplyFirst   *bool   `json:"reply_first"`
+	Host         string  `json:"host"`
 	MapTo        string  `json:"map_to"`
 	Port         uint16  `json:"port"`
 	ResolveRetry *bool   `json:"resolve_retry"`
 	IPv6First    *bool   `json:"ipv6_first"`
-	HttpMode     string  `json:"http_mode"`
+	HttpStatus   int     `json:"http_status"`
 	TLS13Only    *bool   `json:"tls13_only"`
 	Mode         string  `json:"mode"`
 	NumRecords   int     `json:"num_records"`
@@ -26,8 +29,8 @@ type Policy struct {
 
 func (p Policy) String() string {
 	fields := []string{}
-	if p.IP != "" {
-		fields = append(fields, "IP: "+p.IP)
+	if p.Host != "" {
+		fields = append(fields, "host: "+p.Host)
 	}
 	if p.Port != 0 {
 		fields = append(fields, fmt.Sprintf("port=%d", p.Port))
@@ -38,14 +41,16 @@ func (p Policy) String() string {
 	if p.ResolveRetry != nil && *p.ResolveRetry {
 		fields = append(fields, "resolve_retry")
 	}
-	fields = append(fields, fmt.Sprintf("http %s", p.HttpMode))
+	if p.HttpStatus != 0 {
+		fields = append(fields, fmt.Sprintf("http_status=%d", p.HttpStatus))
+	}
+	if p.TLS13Only != nil && *p.TLS13Only {
+		fields = append(fields, "tls13_only")
+	}
 	fields = append(fields, p.Mode)
 	switch p.Mode {
 	case "tls-rf":
 		fields = append(fields, fmt.Sprintf("%d records", p.NumRecords))
-		if p.TLS13Only != nil && *p.TLS13Only {
-			fields = append(fields, "tls13_only")
-		}
 	case "ttl-d":
 		fields = append(fields, "fake_packet: "+escape(p.FakePacket))
 		if p.FakeTTL == 0 {
@@ -54,18 +59,18 @@ func (p Policy) String() string {
 			fields = append(fields, fmt.Sprintf("fake_ttl=%d", p.FakeTTL))
 		}
 		fields = append(fields, fmt.Sprintf("fake_sleep=%v", p.FakeSleep))
-		if p.TLS13Only != nil && *p.TLS13Only {
-			fields = append(fields, "tls13_only")
-		}
 	}
 	return strings.Join(fields, " | ")
 }
 
-func MergePolicies(policies ...Policy) *Policy {
+func mergePolicies(policies ...Policy) *Policy {
 	var merged Policy
 	for _, p := range policies {
-		if p.IP != "" {
-			merged.IP = p.IP
+		if p.ReplyFirst != nil {
+			merged.ReplyFirst = p.ReplyFirst
+		}
+		if p.Host != "" {
+			merged.Host = p.Host
 		}
 		if p.MapTo != "" {
 			merged.MapTo = p.MapTo
@@ -76,8 +81,8 @@ func MergePolicies(policies ...Policy) *Policy {
 		if p.Port != 0 {
 			merged.Port = p.Port
 		}
-		if p.HttpMode != "" {
-			merged.HttpMode = p.HttpMode
+		if p.HttpStatus != 0 {
+			merged.HttpStatus = p.HttpStatus
 		}
 		if p.TLS13Only != nil {
 			merged.TLS13Only = p.TLS13Only
@@ -112,12 +117,114 @@ type Config struct {
 }
 
 var (
-	defaultPolicy         Policy
-	dnsAddr, fakeTTLRules string
-	domainMatcher         *addrtrie.DomainMatcher[Policy]
-	ipMatcher             *addrtrie.BitTrie[Policy]
-	ipv6Matcher           *addrtrie.BitTrie6[Policy]
+	defaultPolicy Policy
+	dnsAddr       string
+	calcTTL       func(int) (int, error)
+	domainMatcher *addrtrie.DomainMatcher[Policy]
+	ipMatcher     *addrtrie.BitTrie[Policy]
+	ipv6Matcher   *addrtrie.BitTrie6[Policy]
 )
+
+type rule struct {
+	threshold int  // a
+	typ       byte // '-' or '='
+	val       int  // b
+}
+
+func parseRules(conf string) ([]rule, error) {
+	if len(conf) == 0 {
+		return nil, errors.New("empty config")
+	}
+	if conf[0] != 'q' {
+		return nil, nil
+	}
+	b := []byte(conf[1:])
+
+	var rules []rule
+	i := 0
+	for i < len(b) {
+		start := i
+		for i < len(b) && b[i] >= '0' && b[i] <= '9' {
+			i++
+		}
+		if start == i {
+			return nil, errors.New("invalid rule: missing left number")
+		}
+		a := 0
+		for _, c := range b[start:i] {
+			a = a*10 + int(c-'0')
+		}
+
+		if i >= len(b) {
+			return nil, errors.New("invalid rule: missing operator")
+		}
+		op := b[i] // '-' or '='
+		if op != '-' && op != '=' {
+			return nil, errors.New("invalid operator")
+		}
+		i++
+
+		start = i
+		for i < len(b) && b[i] >= '0' && b[i] <= '9' {
+			i++
+		}
+		if start == i {
+			return nil, errors.New("invalid rule: missing right number")
+		}
+		val := 0
+		for _, c := range b[start:i] {
+			val = val*10 + int(c-'0')
+		}
+
+		rules = append(rules, rule{
+			threshold: a,
+			typ:       op,
+			val:       val,
+		})
+
+		if i < len(b) && b[i] == ';' {
+			i++
+		}
+	}
+	sort.Slice(rules, func(i, j int) bool {
+		return rules[i].threshold > rules[j].threshold
+	})
+	return rules, nil
+}
+
+func loadFakeTTLRules(conf string) error {
+	rules, err := parseRules(conf)
+	if err != nil {
+		return err
+	}
+	if rules == nil {
+		calcTTL = func(int) (int, error) {
+			val := 0
+			for i := range len(conf) {
+				c := conf[i]
+				if c < '0' || c > '9' {
+					return 0, errors.New("invalid integer config")
+				}
+				val = val*10 + int(c-'0')
+			}
+			return val, nil
+		}
+	} else {
+		calcTTL = func(ttl int) (int, error) {
+			for _, r := range rules {
+				if ttl >= r.threshold {
+					if r.typ == '-' {
+						return ttl - r.val, nil
+					}
+					// r.typ == '='
+					return r.val, nil
+				}
+			}
+			return 0, errors.New("no matching TTL rule")
+		}
+	}
+	return nil
+}
 
 func loadConfig(filePath string) (string, error) {
 	file, err := os.Open(filePath)
@@ -134,7 +241,9 @@ func loadConfig(filePath string) (string, error) {
 	}
 	defaultPolicy = conf.DefaultPolicy
 	dnsAddr = conf.DNSAddr
-	fakeTTLRules = conf.FakeTTLRules
+	if conf.FakeTTLRules != "" {
+		loadFakeTTLRules(conf.FakeTTLRules)
+	}
 
 	domainMatcher = addrtrie.NewDomainMatcher[Policy]()
 	for patterns, policy := range conf.DomainPolicies {

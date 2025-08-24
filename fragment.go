@@ -42,8 +42,8 @@ func sendRecords(conn net.Conn, data []byte, offset, length, num int) error {
 	}
 	idx := offset + 1 + rnd.Intn(length-1)
 
-	rightChunks := num / 2
-	leftChunks := num - rightChunks
+	leftChunks := num / 2
+	rightChunks := num - leftChunks
 	leftData := payload[:idx]
 	rightData := payload[idx:]
 
