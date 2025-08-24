@@ -154,15 +154,7 @@ func handleClient(clientConn net.Conn) {
 			} else {
 				first = dns.TypeA
 			}
-			if policy.ResolveRetry != nil && *policy.ResolveRetry {
-				var err error
-				dstHost, err = dnsQuery(dstAddr, first)
-				if err != nil {
-					logger.Printf("Failed to resolve %s: %s", dstAddr, err)
-					sendReply(logger, clientConn, 0x01, nil, 0)
-					return
-				}
-			} else {
+			if policy.DNSRetry != nil && *policy.DNSRetry {
 				var second uint16
 				if first == dns.TypeA {
 					second = dns.TypeAAAA
@@ -173,6 +165,14 @@ func handleClient(clientConn net.Conn) {
 				dstHost, err1, err2 = doubleQuery(dstAddr, first, second)
 				if err2 != nil {
 					logger.Printf("Failed to resolve %s: err1=%s; err2=%s", dstAddr, err1, err2)
+					sendReply(logger, clientConn, 0x01, nil, 0)
+					return
+				}
+			} else {
+				var err error
+				dstHost, err = dnsQuery(dstAddr, first)
+				if err != nil {
+					logger.Printf("Failed to resolve %s: %s", dstAddr, err)
 					sendReply(logger, clientConn, 0x01, nil, 0)
 					return
 				}

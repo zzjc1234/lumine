@@ -2,29 +2,29 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
-	"strings"
-	"errors"
 	"sort"
+	"strings"
 
 	"github.com/moi-si/addrtrie"
 )
 
 type Policy struct {
-	ReplyFirst   *bool   `json:"reply_first"`
-	Host         string  `json:"host"`
-	MapTo        string  `json:"map_to"`
-	Port         uint16  `json:"port"`
-	ResolveRetry *bool   `json:"resolve_retry"`
-	IPv6First    *bool   `json:"ipv6_first"`
-	HttpStatus   int     `json:"http_status"`
-	TLS13Only    *bool   `json:"tls13_only"`
-	Mode         string  `json:"mode"`
-	NumRecords   int     `json:"num_records"`
-	FakePacket   string  `json:"fake_packet"`
-	FakeTTL      int     `json:"fake_ttl"`
-	FakeSleep    float64 `json:"fake_sleep"`
+	ReplyFirst *bool   `json:"reply_first"`
+	Host       string  `json:"host"`
+	MapTo      string  `json:"map_to"`
+	Port       uint16  `json:"port"`
+	DNSRetry   *bool   `json:"dns_retry"`
+	IPv6First  *bool   `json:"ipv6_first"`
+	HttpStatus int     `json:"http_status"`
+	TLS13Only  *bool   `json:"tls13_only"`
+	Mode       string  `json:"mode"`
+	NumRecords int     `json:"num_records"`
+	FakePacket string  `json:"fake_packet"`
+	FakeTTL    int     `json:"fake_ttl"`
+	FakeSleep  float64 `json:"fake_sleep"`
 }
 
 func (p Policy) String() string {
@@ -38,7 +38,7 @@ func (p Policy) String() string {
 	if p.IPv6First != nil && *p.IPv6First {
 		fields = append(fields, "ipv6_first")
 	}
-	if p.ResolveRetry != nil && *p.ResolveRetry {
+	if p.DNSRetry != nil && *p.DNSRetry {
 		fields = append(fields, "resolve_retry")
 	}
 	if p.HttpStatus != 0 {
@@ -75,8 +75,8 @@ func mergePolicies(policies ...Policy) *Policy {
 		if p.MapTo != "" {
 			merged.MapTo = p.MapTo
 		}
-		if p.ResolveRetry != nil {
-			merged.ResolveRetry = p.ResolveRetry
+		if p.DNSRetry != nil {
+			merged.DNSRetry = p.DNSRetry
 		}
 		if p.Port != 0 {
 			merged.Port = p.Port
