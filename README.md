@@ -1,15 +1,15 @@
 # lumine
 A lightweight local SOCKS5 server written in Golang that protects HTTPS connections.
 
-## Build
+## Installation
 
 ```
 go install github.com/moi-si/lumine@latest
 ```
 
-## Run
+## Usage
 ```
-lumine -config /path/to/config.json
+lumine -config /path/to/config.json -addr 127.0.0.1:1080
 ```
 
 ## Local DNS over UDP
