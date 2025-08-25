@@ -29,11 +29,15 @@ type Policy struct {
 
 func (p Policy) String() string {
 	fields := []string{}
+	var addr string
 	if p.Host != "" {
-		fields = append(fields, "host: "+p.Host)
+		addr += p.Host
 	}
 	if p.Port != 0 {
-		fields = append(fields, fmt.Sprintf("port=%d", p.Port))
+		addr += fmt.Sprintf(":%d", p.Port)
+	}
+	if addr != "" {
+		fields = append(fields, addr)
 	}
 	if p.IPv6First != nil && *p.IPv6First {
 		fields = append(fields, "ipv6_first")
@@ -247,9 +251,10 @@ func loadConfig(filePath string) (string, error) {
 
 	domainMatcher = addrtrie.NewDomainMatcher[Policy]()
 	for patterns, policy := range conf.DomainPolicies {
+		p := policy
 		for elem := range strings.SplitSeq(patterns, ";") {
 			for _, pattern := range expandPattern(elem) {
-				domainMatcher.Add(pattern, policy)
+				domainMatcher.Add(pattern, p)
 			}
 		}
 	}
@@ -261,9 +266,9 @@ func loadConfig(filePath string) (string, error) {
 		for elem := range strings.SplitSeq(patterns, ";") {
 			for _, ipOrNet := range expandPattern(elem) {
 				if strings.Contains(ipOrNet, ":") {
-					ipv6Matcher.Insert(ipOrNet, &p)
+					ipv6Matcher.Insert(ipOrNet, p)
 				} else {
-					ipMatcher.Insert(ipOrNet, &p)
+					ipMatcher.Insert(ipOrNet, p)
 				}
 			}
 		}

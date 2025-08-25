@@ -479,7 +479,7 @@ func handleClient(clientConn net.Conn) {
 func main() {
 	fmt.Println("moi-si/lumine v0.0.5")
 	configPath := flag.String("config", "config.json", "Config file path")
-	addr := flag.String("addr", "", "Server address")
+	addr := flag.String("addr", "", "Listen address")
 	flag.Parse()
 	serverAddr, err := loadConfig(*configPath)
 	if err != nil {
