@@ -140,54 +140,65 @@ func handleClient(clientConn net.Conn) {
 			return
 		}
 		dstAddr = string(domainBytes)
-		domainPolicy := domainMatcher.Find(dstAddr)
-		found := domainPolicy != nil
-		if found {
-			policy = mergePolicies(defaultPolicy, *domainPolicy)
-		} else {
-			policy = &defaultPolicy
-		}
-		if policy.Host == "" {
-			var first uint16
-			if policy.IPv6First != nil && *policy.IPv6First {
-				first = dns.TypeAAAA
-			} else {
-				first = dns.TypeA
-			}
-			if policy.DNSRetry != nil && *policy.DNSRetry {
-				var second uint16
-				if first == dns.TypeA {
-					second = dns.TypeAAAA
-				} else {
-					second = dns.TypeA
-				}
-				var err1, err2 error
-				dstHost, err1, err2 = doubleQuery(dstAddr, first, second)
-				if err2 != nil {
-					logger.Printf("Failed to resolve %s: err1=%s; err2=%s", dstAddr, err1, err2)
-					sendReply(logger, clientConn, 0x01, nil, 0)
-					return
-				}
-			} else {
-				var err error
-				dstHost, err = dnsQuery(dstAddr, first)
-				if err != nil {
-					logger.Printf("Failed to resolve %s: %s", dstAddr, err)
-					sendReply(logger, clientConn, 0x01, nil, 0)
-					return
-				}
-			logger.Printf("DNS %s -> %s", dstAddr, dstHost)
-			}
-		} else {
-			dstHost = policy.Host
-		}
-		var ipPolicy *Policy
-		dstHost, ipPolicy = ipRedirect(logger, dstHost)
-		if ipPolicy != nil {
-			if found {
-				policy = mergePolicies(defaultPolicy, *ipPolicy, *domainPolicy)
+		// For Firefox
+		if net.ParseIP(dstAddr) != nil {
+			var ipPolicy *Policy
+			dstHost, ipPolicy = ipRedirect(logger, dstAddr)
+			if ipPolicy == nil {
+				policy = &defaultPolicy
 			} else {
 				policy = mergePolicies(defaultPolicy, *ipPolicy)
+			}
+		} else {
+			domainPolicy := domainMatcher.Find(dstAddr)
+			found := domainPolicy != nil
+			if found {
+				policy = mergePolicies(defaultPolicy, *domainPolicy)
+			} else {
+				policy = &defaultPolicy
+			}
+			if policy.Host == "" {
+				var first uint16
+				if policy.IPv6First != nil && *policy.IPv6First {
+					first = dns.TypeAAAA
+				} else {
+					first = dns.TypeA
+				}
+				if policy.DNSRetry != nil && *policy.DNSRetry {
+					var second uint16
+					if first == dns.TypeA {
+						second = dns.TypeAAAA
+					} else {
+						second = dns.TypeA
+					}
+					var err1, err2 error
+					dstHost, err1, err2 = doubleQuery(dstAddr, first, second)
+					if err2 != nil {
+						logger.Printf("Failed to resolve %s: err1=%s; err2=%s", dstAddr, err1, err2)
+						sendReply(logger, clientConn, 0x01, nil, 0)
+						return
+					}
+				} else {
+					var err error
+					dstHost, err = dnsQuery(dstAddr, first)
+					if err != nil {
+						logger.Printf("Failed to resolve %s: %s", dstAddr, err)
+						sendReply(logger, clientConn, 0x01, nil, 0)
+						return
+					}
+					logger.Printf("DNS %s -> %s", dstAddr, dstHost)
+				}
+			} else {
+				dstHost = policy.Host
+			}
+			var ipPolicy *Policy
+			dstHost, ipPolicy = ipRedirect(logger, dstHost)
+			if ipPolicy != nil {
+				if found {
+					policy = mergePolicies(defaultPolicy, *ipPolicy, *domainPolicy)
+				} else {
+					policy = mergePolicies(defaultPolicy, *ipPolicy)
+				}
 			}
 		}
 	default:
@@ -276,6 +287,10 @@ func handleClient(clientConn net.Conn) {
 			policy = &defaultPolicy
 		} else {
 			policy = mergePolicies(defaultPolicy, *policy)
+		}
+		if policy.Host != "" {
+			_, ipPolicy := ipRedirect(logger, policy.Host)
+			policy = mergePolicies(defaultPolicy, *ipPolicy, *policy)
 		}
 		if policy.HttpStatus == 0 {
 			if replyFirst {
@@ -483,7 +498,8 @@ func main() {
 	flag.Parse()
 	serverAddr, err := loadConfig(*configPath)
 	if err != nil {
-		panic(fmt.Sprintf("failed to load config: %v", err))
+		fmt.Printf("Failed to load config: %s", err)
+		return
 	}
 
 	var listenAddr string

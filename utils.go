@@ -307,7 +307,7 @@ func escape(s string) string {
 	return s
 }
 
-var dnsClient = new(dns.Client)
+var dnsClient *dns.Client
 
 func dnsQuery(domain string, qtype uint16) (string, error) {
 	msg := new(dns.Msg)

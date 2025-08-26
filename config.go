@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/miekg/dns"
 	"github.com/moi-si/addrtrie"
 )
 
@@ -113,6 +114,7 @@ func mergePolicies(policies ...Policy) *Policy {
 type Config struct {
 	ServerAddr        string            `json:"server_address"`
 	DNSAddr           string            `json:"udp_dns_addr"`
+	UDPSize           uint16            `json:"udp_minsize"`
 	DefaultHttpPolicy int               `json:"default_http_policy"`
 	FakeTTLRules      string            `json:"fake_ttl_rules"`
 	DefaultPolicy     Policy            `json:"default_policy"`
@@ -245,6 +247,11 @@ func loadConfig(filePath string) (string, error) {
 	}
 	defaultPolicy = conf.DefaultPolicy
 	dnsAddr = conf.DNSAddr
+	if conf.UDPSize == 0 {
+		dnsClient = new(dns.Client)
+	} else {
+		dnsClient = &dns.Client{UDPSize: conf.UDPSize}
+	}
 	if conf.FakeTTLRules != "" {
 		loadFakeTTLRules(conf.FakeTTLRules)
 	}
