@@ -433,8 +433,9 @@ func handleClient(clientConn net.Conn) {
 					return
 				}
 				var ttl int
+				ipv6 := target[0] == '['
 				if policy.FakeTTL == 0 {
-					ttl, err = minReachableTTL(target)
+					ttl, err = minReachableTTL(target, ipv6)
 					if err != nil {
 						logger.Println("Probe TTL failed:", err)
 						sendReply(logger, clientConn, 0x01, nil, 0)
@@ -460,13 +461,8 @@ func handleClient(clientConn net.Conn) {
 					ttl = policy.FakeTTL
 				}
 				err = desyncSend(
-					dstConn,
-					record,
-					sniPos,
-					sniLen,
-					fakePacketBytes,
-					policy.FakeSleep,
-					ttl,
+					dstConn, ipv6, record, fakePacketBytes,
+					sniPos, sniLen, ttl, policy.FakeSleep,
 				)
 				if err != nil {
 					logger.Println("Error TTL desync:", err)

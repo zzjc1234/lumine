@@ -10,7 +10,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 
@@ -18,9 +17,9 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func minReachableTTL(addr string) (int, error) {
+func minReachableTTL(addr string, ipv6 bool) (int, error) {
 	var level, opt int
-	if strings.Contains(addr, "[") {
+	if ipv6 {
 		level, opt = windows.IPPROTO_IPV6, windows.IPV6_UNICAST_HOPS
 	} else {
 		level, opt = windows.IPPROTO_IP, windows.IP_TTL
@@ -66,14 +65,14 @@ func tryConnectWithTTL(address string, level, opt, ttl int) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	_ = conn.Close()
+	conn.Close()
 	return true, nil
 }
 
-func sendDataWithFake(
+func sendFakeData(
 	sockHandle windows.Handle,
 	fakeData, realData []byte,
-	dataLen, fakeTTL, defaultTTL int,
+	dataLen, fakeTTL, defaultTTL, level, opt int,
 	fakeSleep float64,
 ) error {
 	if fakeSleep < 0.1 {
@@ -126,12 +125,7 @@ func sendDataWithFake(
 	if err = windows.SetEndOfFile(fileHandle); err != nil {
 		return fmt.Errorf("failed to set end of file: %v", err)
 	}
-	err = windows.SetsockoptInt(
-		sockHandle,
-		windows.IPPROTO_IP,
-		windows.IP_TTL,
-		fakeTTL,
-	)
+	err = windows.SetsockoptInt(sockHandle,level, opt, fakeTTL)
 	if err != nil {
 		return fmt.Errorf("failed to set fake TTL: %v", err)
 	}
@@ -151,8 +145,7 @@ func sendDataWithFake(
 	)
 	time.Sleep(time.Duration(fakeSleep * float64(time.Second)))
 
-	_, err = windows.SetFilePointer(fileHandle, 0, zero, 0)
-	if err != nil {
+	if _, err = windows.SetFilePointer(fileHandle, 0, zero, 0); err != nil {
 		return fmt.Errorf("failed to set file pointer: %v", err)
 	}
 	err = windows.WriteFile(
@@ -171,13 +164,7 @@ func sendDataWithFake(
 	if err != nil {
 		return fmt.Errorf("failed to set file pointer: %v", err)
 	}
-	err = windows.SetsockoptInt(
-		sockHandle,
-		windows.IPPROTO_IP,
-		windows.IP_TTL,
-		defaultTTL,
-	)
-	if err != nil {
+	if err = windows.SetsockoptInt(sockHandle, level, opt, defaultTTL); err != nil {
 		return fmt.Errorf("failed to set default TTL: %v", err)
 	}
 
@@ -192,12 +179,8 @@ func sendDataWithFake(
 }
 
 func desyncSend(
-	conn net.Conn,
-	firstPacket []byte,
-	sniPos, sniLen int,
-	fakeData []byte,
-	fakeSleep float64,
-	fakeTTL int,
+	conn net.Conn, ipv6 bool, 
+	firstPacket, fakeData []byte, sniPos, sniLen, fakeTTL int, fakeSleep float64,
 ) error {
 	tcpConn, ok := conn.(*net.TCPConn)
 	if !ok {
@@ -218,22 +201,27 @@ func desyncSend(
 		return fmt.Errorf("control error: %v", err)
 	}
 
-	defaultTTL, err := windows.GetsockoptInt(
-		sockHandle,
-		windows.IPPROTO_IP,
-		windows.IP_TTL,
-	)
+	var level, opt int
+	if ipv6 {
+		level = windows.IPPROTO_IPV6
+		opt = windows.IPV6_UNICAST_HOPS
+	} else {
+		level = windows.IPPROTO_IP
+		opt = windows.IP_TTL
+	}
+	defaultTTL, err := windows.GetsockoptInt(sockHandle, level, opt)
 	if err != nil {
 		return fmt.Errorf("failed to get default TTL: %v", err)
 	}
 	dataLen := len(fakeData)
-	err = sendDataWithFake(
+	err = sendFakeData(
 		sockHandle,
 		fakeData,
 		firstPacket[:dataLen],
 		dataLen,
 		fakeTTL,
 		defaultTTL,
+		level, opt,
 		fakeSleep,
 	)
 	if err != nil {
@@ -251,13 +239,14 @@ func desyncSend(
 		return fmt.Errorf("failed to send data after first fake packet: %v", err)
 	}
 	firstPacket = firstPacket[offset:]
-	err = sendDataWithFake(
+	err = sendFakeData(
 		sockHandle,
 		fakeData,
 		firstPacket[:dataLen],
 		dataLen,
 		fakeTTL,
 		defaultTTL,
+		level, opt,
 		fakeSleep,
 	)
 	if err != nil {
