@@ -312,11 +312,14 @@ var dnsClient *dns.Client
 func dnsQuery(domain string, qtype uint16) (string, error) {
 	msg := new(dns.Msg)
 	msg.SetQuestion(domain+".", qtype)
-	res, _, err := dnsClient.Exchange(msg, dnsAddr)
+	resp, _, err := dnsClient.Exchange(msg, dnsAddr)
 	if err != nil {
-		return "", fmt.Errorf("error dns resolve: %v", err)
+		return "", fmt.Errorf("dns exchange: %s", err)
 	}
-	for _, ans := range res.Answer {
+	if resp.Rcode != dns.RcodeSuccess {
+		return "", fmt.Errorf("bad rcode: %s", dns.RcodeToString[resp.Rcode])
+	}
+	for _, ans := range resp.Answer {
 		switch qtype {
 		case dns.TypeA:
 			if record, ok := ans.(*dns.A); ok {
