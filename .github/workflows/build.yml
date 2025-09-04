@@ -32,26 +32,11 @@ jobs:
         run: go test -v ./...
 
   build:
-    name: Build for ${{ matrix.os }}/${{ matrix.arch }}
-    runs-on: ${{ matrix.os }}
+    name: Build for ${{ matrix.target }}
+    runs-on: ubuntu-latest
     strategy:
       matrix:
-        include:
-          - os: ubuntu-latest
-            arch: amd64
-            os_name: linux
-          - os: ubuntu-latest
-            arch: arm64
-            os_name: linux
-          - os: macos-latest
-            arch: amd64
-            os_name: darwin
-          - os: macos-latest
-            arch: arm64
-            os_name: darwin
-          - os: windows-latest
-            arch: amd64
-            os_name: windows
+        target: [linux-amd64, linux-arm64, darwin-amd64, darwin-arm64, windows-amd64]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -66,24 +51,33 @@ jobs:
         run: |
           echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
           echo "COMMIT=${GITHUB_SHA::8}" >> $GITHUB_ENV
-        shell: bash
 
-      - name: Build binary (Unix)
-        if: matrix.os != 'windows-latest'
+      - name: Build binary
         run: |
-          GOOS=${{ matrix.os_name }} GOARCH=${{ matrix.arch }} go build -o lumine-${{ matrix.os_name }}-${{ matrix.arch }} -ldflags "-X main.version=${VERSION} -X main.commit=${COMMIT}" .
-          chmod +x lumine-${{ matrix.os_name }}-${{ matrix.arch }}
-
-      - name: Build binary (Windows)
-        if: matrix.os == 'windows-latest'
-        run: |
-          GOOS=windows GOARCH=${{ matrix.arch }} go build -o lumine-${{ matrix.os_name }}-${{ matrix.arch }}.exe -ldflags "-X main.version=${VERSION} -X main.commit=${COMMIT}" .
+          # Parse target
+          OS=$(echo ${{ matrix.target }} | cut -d '-' -f 1)
+          ARCH=$(echo ${{ matrix.target }} | cut -d '-' -f 2)
+          
+          # Set output name
+          if [ "$OS" = "windows" ]; then
+            OUTPUT="lumine-${OS}-${ARCH}.exe"
+          else
+            OUTPUT="lumine-${OS}-${ARCH}"
+          fi
+          
+          # Build
+          GOOS=$OS GOARCH=$ARCH go build -o $OUTPUT -ldflags "-X main.version=${VERSION} -X main.commit=${COMMIT}" .
+          
+          # Make executable (non-Windows)
+          if [ "$OS" != "windows" ]; then
+            chmod +x $OUTPUT
+          fi
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: lumine-${{ matrix.os_name }}-${{ matrix.arch }}${{ matrix.os_name == 'windows' && '.exe' || '' }}
-          path: lumine-${{ matrix.os_name }}-${{ matrix.arch }}${{ matrix.os_name == 'windows' && '.exe' || '' }}
+          name: lumine-${{ matrix.target }}${{ endsWith(matrix.target, 'windows-amd64') && '.exe' || '' }}
+          path: lumine-${{ matrix.target }}${{ endsWith(matrix.target, 'windows-amd64') && '.exe' || '' }}
 
   release:
     name: Create Release
