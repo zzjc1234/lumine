@@ -1,0 +1,125 @@
+name: Build and Release
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  release:
+    types:
+      - created
+
+jobs:
+  test:
+    name: Test on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Run tests
+        run: go test -v ./...
+
+  build:
+    name: Build for ${{ matrix.os }}/${{ matrix.arch }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            arch: amd64
+            os_name: linux
+          - os: ubuntu-latest
+            arch: arm64
+            os_name: linux
+          - os: macos-latest
+            arch: amd64
+            os_name: darwin
+          - os: macos-latest
+            arch: arm64
+            os_name: darwin
+          - os: windows-latest
+            arch: amd64
+            os_name: windows
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Set environment variables
+        run: |
+          echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
+          echo "COMMIT=${GITHUB_SHA::8}" >> $GITHUB_ENV
+        shell: bash
+
+      - name: Build binary (Unix)
+        if: matrix.os != 'windows-latest'
+        run: |
+          GOOS=${{ matrix.os_name }} GOARCH=${{ matrix.arch }} go build -o lumine-${{ matrix.os_name }}-${{ matrix.arch }} -ldflags "-X main.version=${VERSION} -X main.commit=${COMMIT}" .
+          chmod +x lumine-${{ matrix.os_name }}-${{ matrix.arch }}
+
+      - name: Build binary (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          GOOS=windows GOARCH=${{ matrix.arch }} go build -o lumine-${{ matrix.os_name }}-${{ matrix.arch }}.exe -ldflags "-X main.version=${VERSION} -X main.commit=${COMMIT}" .
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: lumine-${{ matrix.os_name }}-${{ matrix.arch }}${{ matrix.os_name == 'windows' && '.exe' || '' }}
+          path: lumine-${{ matrix.os_name }}-${{ matrix.arch }}${{ matrix.os_name == 'windows' && '.exe' || '' }}
+
+  release:
+    name: Create Release
+    needs: [test, build]
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List artifacts
+        run: ls -R artifacts
+
+      - name: Create checksums
+        run: |
+          cd artifacts
+          for dir in */; do
+            cd "$dir"
+            for file in *; do
+              if [ -f "$file" ]; then
+                openssl dgst -sha256 "$file" > "../$file.sha256"
+              fi
+            done
+            cd ..
+          done
+          ls -la
+
+      - name: Upload binaries to release
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: |
+            artifacts/*/*
+            artifacts/*.sha256
